@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -29,8 +30,24 @@ class ChatRequest(BaseModel):
         if self.resume:
             if self.resume_value is None:
                 raise ValueError("resume_value is required when resume is true")
+            if not self.conversation_id:
+                raise ValueError("conversation_id is required when resume is true")
         else:
             if self.message is None or not str(self.message).strip():
                 raise ValueError("message is required when resume is false")
         return self
+
+
+class ConversationListItem(BaseModel):
+    id: str
+    created_at: datetime
+    last_activity_at: datetime
+    last_message_preview: str | None = None
+
+
+class MessageItem(BaseModel):
+    id: int
+    role: str
+    content: str
+    created_at: datetime
 

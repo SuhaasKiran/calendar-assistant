@@ -9,6 +9,67 @@ export type ChatRequestBody = {
   resume_value?: unknown;
 };
 
+export type ConversationSummary = {
+  id: string;
+  created_at: string;
+  last_activity_at: string;
+  last_message_preview: string | null;
+};
+
+export type ConversationMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
+async function responseErrorMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  if (!text) return response.statusText || "Request failed";
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) return parsed.detail;
+  } catch {
+    // fallback to plain-text body
+  }
+  return text;
+}
+
+export async function listConversations(signal?: AbortSignal): Promise<ConversationSummary[]> {
+  const response = await apiFetch("/chat/conversations", { signal });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response));
+  }
+  return (await response.json()) as ConversationSummary[];
+}
+
+export async function getConversationMessages(
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<ConversationMessage[]> {
+  const response = await apiFetch(`/chat/conversations/${conversationId}/messages`, { signal });
+  if (!response.ok) {
+    const message = await responseErrorMessage(response);
+    const error = new Error(message);
+    (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+  return (await response.json()) as ConversationMessage[];
+}
+
+export async function deleteConversation(
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(`/chat/conversations/${conversationId}`, {
+    method: "DELETE",
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response));
+  }
+}
+
 /**
  * POST `/chat` with SSE body. Invokes `onEvent` for each parsed JSON event until the stream ends.
  */
@@ -28,8 +89,7 @@ export async function postChatStream(
   });
 
   if (!r.ok) {
-    const t = await r.text();
-    throw new Error(t || r.statusText);
+    throw new Error(await responseErrorMessage(r));
   }
 
   if (!r.body) {

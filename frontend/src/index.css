@@ -45,6 +45,112 @@ body {
   padding: 1.5rem 1.25rem 2rem;
 }
 
+.app-shell.chat {
+  max-width: 1080px;
+}
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.chat-main {
+  min-width: 0;
+}
+
+.thread-sidebar {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.75rem;
+  height: fit-content;
+}
+
+.thread-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.thread-sidebar-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.thread-item {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: #0c0e12;
+  color: var(--text);
+  border-radius: 10px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem;
+}
+
+.thread-item.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.thread-preview {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.88rem;
+}
+
+.thread-time {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.thread-open-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  min-width: 0;
+  flex: 1;
+}
+
+.thread-open-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.thread-delete-btn {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.35rem 0.45rem;
+  cursor: pointer;
+}
+
+.thread-delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .app-header {
   margin-bottom: 1.25rem;
 }
@@ -257,4 +363,14 @@ body {
 .loading {
   padding: 3rem 1rem;
   text-align: center;
+}
+
+@media (max-width: 900px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .thread-sidebar {
+    order: 2;
+  }
 }

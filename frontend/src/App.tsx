@@ -31,6 +31,14 @@ export default function App() {
               </RequireAuth>
             }
           />
+          <Route
+            path="/c/:conversationId"
+            element={
+              <RequireAuth>
+                <ChatScreen />
+              </RequireAuth>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
