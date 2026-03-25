@@ -14,12 +14,30 @@ MAX_SAME_FINGERPRINT_STRIKES = 3
 
 
 def route_after_tools(state: dict) -> Literal["graceful_stop", "agent", "end_turn"]:
-    """After ToolNode: clarification ends the turn (normal chat); otherwise continue the loop."""
+    """Backward-compatible single-agent router after ToolNode."""
+    out = route_after_tools_domain(state)
+    if out == "graceful_stop":
+        return "graceful_stop"
+    if out == "return_to_main":
+        return "end_turn"
+    return "agent"
+
+
+def route_after_tools_domain(
+    state: dict,
+) -> Literal["graceful_stop", "return_to_main", "continue_domain"]:
+    """
+    Domain-aware router after ToolNode.
+
+    - graceful_stop: loop guard triggered.
+    - return_to_main: clarification-only turn should return to main router/end turn.
+    - continue_domain: continue the current domain loop.
+    """
     if state.get("loop_stopped"):
         return "graceful_stop"
     if _last_ai_tool_calls_were_only_clarification(state):
-        return "end_turn"
-    return "agent"
+        return "return_to_main"
+    return "continue_domain"
 
 
 def _last_ai_tool_calls_were_only_clarification(state: dict) -> bool:
@@ -44,11 +62,24 @@ def route_post_agent(state: dict) -> Literal["approval_gate", "__end__"]:
 
 
 def route_after_approval(state: dict) -> Literal["execute_mutations", "agent", "__end__"]:
+    """Backward-compatible single-agent router after approval gate."""
+    out = route_after_approval_domain(state)
+    if out == "execute_mutations":
+        return "execute_mutations"
+    if out == "continue_domain":
+        return "agent"
+    return "__end__"
+
+
+def route_after_approval_domain(
+    state: dict,
+) -> Literal["execute_mutations", "continue_domain", "return_to_main"]:
+    """Domain-aware router after approval gate."""
     if state.get("resume_approved") is True:
         return "execute_mutations"
     if state.get("approval_edit_requested"):
-        return "agent"
-    return "__end__"
+        return "continue_domain"
+    return "return_to_main"
 
 
 def fingerprint_tool_calls(ai: AIMessage) -> list[str]:

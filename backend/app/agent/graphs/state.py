@@ -9,12 +9,12 @@ from typing import Annotated, Any, Literal, NotRequired, TypedDict
 from langgraph.graph.message import add_messages
 from typing_extensions import Required
 
-MAX_MESSAGES_STATE = 40
-SUMMARY_TRIGGER_MESSAGES = 30
-SUMMARY_KEEP_RECENT_MESSAGES = 16
+MAX_MESSAGES_STATE = 20  # maximum messages before summary+compaction
+MIN_MESSAGES_AFTER_SUMMARIZATION = 10  # retain this many recent messages after compaction
 
 
 PROPOSAL_CLEAR: dict[str, Any] = {"type": "__clear__", "id": ""}
+REPLACE_MESSAGES_KEY = "__replace_messages__"
 
 
 def reduce_pending_proposals(
@@ -37,12 +37,22 @@ def reduce_messages_bounded(
     existing: list[Any] | None,
     new_items: list[Any] | None,
 ) -> list[Any]:
-    """Append messages, keep a bounded window, and avoid orphan leading tool messages."""
-    merged = add_messages(existing or [], new_items or [])
-    if len(merged) <= MAX_MESSAGES_STATE:
-        return merged
-    trimmed = list(merged[-MAX_MESSAGES_STATE:])
-    # If truncation cuts off a parent AI tool_call message, drop orphan leading tool messages.
+    """
+    Append messages by default.
+    Supports replacement mode when first new item is:
+    { "__replace_messages__": True, "messages": [...] }.
+    """
+    incoming = list(new_items or [])
+    base = list(existing or [])
+
+    if incoming and isinstance(incoming[0], dict) and incoming[0].get(REPLACE_MESSAGES_KEY):
+        replacement = incoming[0].get("messages") or []
+        if isinstance(replacement, list):
+            base = list(replacement)
+        incoming = incoming[1:]
+
+    merged = add_messages(base, incoming)
+    trimmed = list(merged)
     while trimmed and getattr(trimmed[0], "type", None) == "tool":
         trimmed.pop(0)
     return trimmed
@@ -151,6 +161,14 @@ class CalendarAgentState(TypedDict):
     """Set by approval_gate after user confirms or rejects pending proposals."""
     approval_edit_requested: NotRequired[bool]
     """Set when user selects edit so routing returns to agent with user feedback."""
+    task_agent_route: NotRequired[Literal["email_agent", "calendar_agent", "__end__"]]
+    """Transient main-router decision used by hierarchical fanout."""
+    task_agent_plan: NotRequired[list[Literal["email_agent", "calendar_agent"]]]
+    """Ordered domain execution plan for the current user turn."""
+    task_agent_plan_index: NotRequired[int]
+    """Next step index into task_agent_plan."""
+    task_agent_plan_source_human_idx: NotRequired[int]
+    """Index of the human message used to build the current plan."""
 
 
 class GraphContext(TypedDict, total=False):

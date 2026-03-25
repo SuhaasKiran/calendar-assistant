@@ -11,7 +11,12 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.orm import Session
 
 from app.agent.graphs.react_graph import build_react_assistant_graph
-from app.agent.prompts import chat_system_prompt
+from app.agent.prompts import (
+    chat_calendar_agent_prompt,
+    chat_email_agent_prompt,
+    chat_main_agent_prompt,
+    chat_system_prompt,
+)
 from app.agent.tools import build_agent_tools
 from app.config import Settings
 
@@ -54,4 +59,16 @@ def build_calendar_assistant_graph(
         graph_name="main",
         approval_from_email=approval_from_email,
         user_email=user_email,
+        main_system_prompt=chat_main_agent_prompt(
+            user_timezone=default_timezone,
+            user_email=user_email,
+        ),
+        email_system_prompt=chat_email_agent_prompt(
+            user_timezone=default_timezone,
+            user_email=user_email,
+        ),
+        calendar_system_prompt=chat_calendar_agent_prompt(
+            user_timezone=default_timezone,
+            user_email=user_email,
+        ),
     )

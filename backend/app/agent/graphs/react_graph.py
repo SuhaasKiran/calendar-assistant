@@ -24,17 +24,20 @@ from sqlalchemy.orm import Session
 from app.agent.graphs.routing import (
     check_tool_loop_limits,
     fingerprint_tool_calls,
-    route_after_approval,
-    route_after_tools,
+    route_after_approval_domain,
+    route_after_tools_domain,
 )
 from app.agent.graphs.state import (
+    MAX_MESSAGES_STATE,
+    MIN_MESSAGES_AFTER_SUMMARIZATION,
     PROPOSAL_CLEAR,
-    SUMMARY_KEEP_RECENT_MESSAGES,
-    SUMMARY_TRIGGER_MESSAGES,
+    REPLACE_MESSAGES_KEY,
     CalendarAgentState,
 )
 from app.agent.prompts import chat_context_prompt
 from app.agent.tools.execution import execute_all_proposals, format_execution_summary
+from app.agent.tools.proposals_calendar import CALENDAR_PROPOSAL_TYPES
+from app.agent.tools.proposals_gmail import GMAIL_PROPOSAL_TYPES
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -426,6 +429,9 @@ def build_react_assistant_graph(
     graph_name: str = "assistant",
     approval_from_email: str | None = None,
     user_email: str | None = None,
+    main_system_prompt: str | None = None,
+    email_system_prompt: str | None = None,
+    calendar_system_prompt: str | None = None,
 ):
     """
     Compile a ReAct-style graph with optional proposal scope.
@@ -434,7 +440,6 @@ def build_react_assistant_graph(
     only consider proposals whose ``type`` is in the set. The main combined graph passes
     ``None`` to handle calendar + Gmail proposals together.
     """
-    tool_node = ToolNode(tools)
     bound_tool_names = _tool_names_for_log(tools)
     logger.info(
         "react_graph init graph=%s user_id=%s tool_count=%s tool_names=%s",
@@ -452,16 +457,95 @@ def build_react_assistant_graph(
             user_id,
         )
 
-    def call_model(
+    def _domain_default() -> Literal["email_agent", "calendar_agent", "__end__"]:
+        if proposal_types_scope == GMAIL_PROPOSAL_TYPES:
+            return "email_agent"
+        if proposal_types_scope == CALENDAR_PROPOSAL_TYPES:
+            return "calendar_agent"
+        low = graph_name.lower()
+        if "gmail" in low or "email" in low:
+            return "email_agent"
+        if "calendar" in low:
+            return "calendar_agent"
+        return "calendar_agent"
+
+    def _tool_name(tool_obj: Any) -> str:
+        n = getattr(tool_obj, "name", None)
+        if callable(n):
+            try:
+                n = n()
+            except Exception:
+                n = None
+        if n is None and hasattr(tool_obj, "get_name"):
+            try:
+                n = tool_obj.get_name()  # type: ignore[union-attr]
+            except Exception:
+                n = None
+        return n if isinstance(n, str) else ""
+
+    def _is_email_tool_name(name: str) -> bool:
+        low = name.lower()
+        return any(tok in low for tok in ("email", "gmail", "draft"))
+
+    def _is_calendar_tool_name(name: str) -> bool:
+        low = name.lower()
+        return any(tok in low for tok in ("calendar", "event", "meeting", "busy", "conflict"))
+
+    def _partition_domain_tools(all_tools: list[Any]) -> tuple[list[Any], list[Any]]:
+        email_domain_tools: list[Any] = []
+        calendar_domain_tools: list[Any] = []
+        for t in all_tools:
+            name = _tool_name(t)
+            if name == "request_user_clarification":
+                email_domain_tools.append(t)
+                calendar_domain_tools.append(t)
+                continue
+            is_email = _is_email_tool_name(name)
+            is_calendar = _is_calendar_tool_name(name)
+            if is_email:
+                email_domain_tools.append(t)
+            if is_calendar:
+                calendar_domain_tools.append(t)
+            if not is_email and not is_calendar:
+                # Keep unknown tools reachable while preserving domain fanout.
+                email_domain_tools.append(t)
+                calendar_domain_tools.append(t)
+        return email_domain_tools, calendar_domain_tools
+
+    email_tools, calendar_tools = _partition_domain_tools(tools)
+    email_tool_node = ToolNode(email_tools)
+    calendar_tool_node = ToolNode(calendar_tools)
+
+    def _has_action_tools(domain_tools: list[Any]) -> bool:
+        for t in domain_tools:
+            if _tool_name(t) != "request_user_clarification":
+                return True
+        return False
+
+    email_available = _has_action_tools(email_tools)
+    calendar_available = _has_action_tools(calendar_tools)
+    logger.info(
+        "react_graph graph=%s user_id=%s domain_tools email=%s calendar=%s",
+        graph_name,
+        user_id,
+        _tool_names_for_log(email_tools),
+        _tool_names_for_log(calendar_tools),
+    )
+
+    resolved_main_prompt = main_system_prompt or system_prompt
+    resolved_email_prompt = email_system_prompt or system_prompt
+    resolved_calendar_prompt = calendar_system_prompt or system_prompt
+
+    def _invoke_domain_model(
         state: CalendarAgentState, config: RunnableConfig | None = None
     ) -> dict[str, Any]:
         msgs = _repair_openai_tool_message_chain(list(state["messages"]))
         existing_summary = (state.get("conversation_summary") or "").strip() or None
 
         updates: dict[str, Any] = {}
-        if len(msgs) > SUMMARY_TRIGGER_MESSAGES:
-            cutoff = max(len(msgs) - SUMMARY_KEEP_RECENT_MESSAGES, 0)
-            chunk = msgs[:cutoff]
+        compacted_recent: list[Any] | None = None
+        if len(msgs) > MAX_MESSAGES_STATE:
+            chunk = msgs[:MAX_MESSAGES_STATE]
             chunk_text = _render_recent_messages(chunk)
             updated_summary = _summarize_chunk(
                 llm=llm,
@@ -471,9 +555,12 @@ def build_react_assistant_graph(
             if updated_summary != existing_summary:
                 updates["conversation_summary"] = updated_summary
                 existing_summary = updated_summary
+            compacted_recent = list(msgs[-MIN_MESSAGES_AFTER_SUMMARIZATION:])
+            while compacted_recent and getattr(compacted_recent[0], "type", None) == "tool":
+                compacted_recent.pop(0)
+            msgs = compacted_recent
 
-        recent_slice = msgs[-SUMMARY_KEEP_RECENT_MESSAGES:]
-        recent_context = _render_recent_messages(recent_slice)
+        recent_context = _render_recent_messages(msgs)
         now_iso = _now_rfc3339_in_tz(default_timezone)
         dynamic_ctx = (
             f"\n\nContext (refreshed each model call): "
@@ -484,27 +571,40 @@ def build_react_assistant_graph(
             conversation_summary=existing_summary,
             recent_messages_context=recent_context,
         )
-        combined_system = system_prompt + dynamic_ctx + summary_ctx
+        domain = (config or {}).get("configurable", {}).get("domain", "unknown")
+        domain_tools = tools
+        domain_prompt = resolved_calendar_prompt
+        if domain == "email":
+            domain_tools = email_tools
+            domain_prompt = resolved_email_prompt
+        elif domain == "calendar":
+            domain_tools = calendar_tools
+            domain_prompt = resolved_calendar_prompt
+
+        combined_system = domain_prompt + dynamic_ctx + summary_ctx
         if not msgs:
             msgs = [SystemMessage(content=combined_system)]
         elif hasattr(msgs[0], "type") and msgs[0].type == "system":
             msgs = [SystemMessage(content=combined_system), *msgs[1:]]
         else:
             msgs = [SystemMessage(content=combined_system), *msgs]
-        out = llm.bind_tools(tools).invoke(msgs)
+
+        out = llm.bind_tools(domain_tools).invoke(msgs)
         tcs = getattr(out, "tool_calls", None) or []
         if tcs:
             names = [tc.get("name") for tc in tcs]
             logger.info(
-                "react_graph graph=%s user_id=%s model_tool_calls=%s",
+                "react_graph graph=%s user_id=%s domain=%s model_tool_calls=%s",
                 graph_name,
                 user_id,
+                domain,
                 names,
             )
             for tc in tcs:
                 logger.debug(
-                    "react_graph graph=%s tool_call name=%s args=%s",
+                    "react_graph graph=%s domain=%s tool_call name=%s args=%s",
                     graph_name,
+                    domain,
                     tc.get("name"),
                     tc.get("args"),
                 )
@@ -512,13 +612,137 @@ def build_react_assistant_graph(
             text = getattr(out, "content", None)
             preview = (text if isinstance(text, str) else str(text))[:1200]
             logger.info(
-                "react_graph graph=%s user_id=%s model_finished_without_tools "
+                "react_graph graph=%s user_id=%s domain=%s model_finished_without_tools "
                 "content_preview=%r",
                 graph_name,
                 user_id,
+                domain,
                 preview,
             )
+        if compacted_recent is not None:
+            return {
+                **updates,
+                "messages": [
+                    {REPLACE_MESSAGES_KEY: True, "messages": compacted_recent},
+                    out,
+                ],
+            }
         return {**updates, "messages": [out]}
+
+    def call_main_agent(
+        state: CalendarAgentState, config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        latest_human = _latest_human_with_index(state)
+        if latest_human is None:
+            return {"task_agent_route": "__end__"}
+
+        human_idx, text = latest_human
+        text = text.strip()
+        if not text:
+            return {"task_agent_route": "__end__"}
+
+        existing_plan = _normalize_plan_steps(state.get("task_agent_plan") or [])
+        existing_idx = int(state.get("task_agent_plan_index", 0) or 0)
+        existing_source_idx = state.get("task_agent_plan_source_human_idx")
+        is_same_turn = existing_source_idx == human_idx
+
+        if is_same_turn and existing_idx < len(existing_plan):
+            decision = existing_plan[existing_idx]
+            logger.info(
+                "react_graph graph=%s user_id=%s main_plan_continue step=%s/%s route=%s",
+                graph_name,
+                user_id,
+                existing_idx + 1,
+                len(existing_plan),
+                decision,
+            )
+            return {
+                "task_agent_route": decision,
+                "task_agent_plan": existing_plan,
+                "task_agent_plan_index": existing_idx + 1,
+                "task_agent_plan_source_human_idx": human_idx,
+            }
+        if is_same_turn:
+            return {"task_agent_route": "__end__"}
+
+        planning_prompt = (
+            f"{resolved_main_prompt}\n\n"
+            "Create an execution plan using only these domain steps:\n"
+            "- calendar_agent\n"
+            "- email_agent\n\n"
+            "Rules:\n"
+            "1) Include each domain at most once.\n"
+            "2) Order steps by dependency. If an email depends on calendar actions, calendar_agent must come first.\n"
+            "3) Return strict JSON only, no prose.\n"
+            'Format: {"steps":["calendar_agent","email_agent"]}\n'
+            'Use {"steps":[]} when no domain work is needed.'
+        )
+        plan_steps: list[Literal["email_agent", "calendar_agent"]] = []
+        try:
+            out = llm.invoke(
+                [
+                    SystemMessage(content=planning_prompt),
+                    HumanMessage(content=text),
+                ]
+            )
+            payload = _message_content_text(out).strip()
+            parsed = json.loads(payload)
+            plan_steps = _normalize_plan_steps(parsed.get("steps") if isinstance(parsed, dict) else [])
+        except Exception:
+            plan_steps = []
+
+        if not plan_steps:
+            plan_steps = _heuristic_plan_for_text(text)
+        if not email_available:
+            plan_steps = [s for s in plan_steps if s != "email_agent"]
+        if not calendar_available:
+            plan_steps = [s for s in plan_steps if s != "calendar_agent"]
+
+        if not plan_steps:
+            logger.info(
+                "react_graph graph=%s user_id=%s main_plan_new steps=[]",
+                graph_name,
+                user_id,
+            )
+            return {
+                "task_agent_route": "__end__",
+                "task_agent_plan": [],
+                "task_agent_plan_index": 0,
+                "task_agent_plan_source_human_idx": human_idx,
+            }
+
+        decision = plan_steps[0]
+        logger.info(
+            "react_graph graph=%s user_id=%s main_plan_new steps=%s first=%s",
+            graph_name,
+            user_id,
+            plan_steps,
+            decision,
+        )
+        return {
+            "task_agent_route": decision,
+            "task_agent_plan": plan_steps,
+            "task_agent_plan_index": 1,
+            "task_agent_plan_source_human_idx": human_idx,
+        }
+
+    def call_email_model(
+        state: CalendarAgentState, config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        cfg = dict(config or {})
+        configurable = dict(cfg.get("configurable", {}))
+        configurable["domain"] = "email"
+        cfg["configurable"] = configurable
+        return _invoke_domain_model(state, config=cfg)
+
+    def call_calendar_model(
+        state: CalendarAgentState, config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        cfg = dict(config or {})
+        configurable = dict(cfg.get("configurable", {}))
+        configurable["domain"] = "calendar"
+        cfg["configurable"] = configurable
+        return _invoke_domain_model(state, config=cfg)
 
     def after_tools(
         state: CalendarAgentState, config: RunnableConfig | None = None
@@ -575,11 +799,15 @@ def build_react_assistant_graph(
         )
         return {"tool_rounds": tr, "tool_fingerprints": merged}
 
-    def approval_gate(
-        state: CalendarAgentState, config: RunnableConfig | None = None
+    def _approval_gate_for_scope(
+        state: CalendarAgentState,
+        config: RunnableConfig | None = None,
+        *,
+        unit_name: str,
+        scope: frozenset[str] | None,
     ) -> dict[str, Any]:
         raw = [p for p in (state.get("pending_proposals") or []) if p.get("type") != "__clear__"]
-        props = _filter_proposals_by_scope(raw, proposal_types_scope)
+        props = _filter_proposals_by_scope(raw, scope)
         if not props:
             return {}
         summary = _format_approval_display(props, from_email=approval_from_email)
@@ -588,7 +816,7 @@ def build_react_assistant_graph(
                 "kind": "approval",
                 "proposals": props,
                 "summary": summary,
-                "unit": graph_name,
+                "unit": unit_name,
                 "actions": [
                     {"id": "approve", "label": "Approve"},
                     {"id": "edit", "label": "Edit"},
@@ -633,11 +861,34 @@ def build_react_assistant_graph(
             ],
         }
 
-    def execute_mutations(
+    def email_approval_gate(
         state: CalendarAgentState, config: RunnableConfig | None = None
     ) -> dict[str, Any]:
+        return _approval_gate_for_scope(
+            state,
+            config=config,
+            unit_name="email",
+            scope=GMAIL_PROPOSAL_TYPES,
+        )
+
+    def calendar_approval_gate(
+        state: CalendarAgentState, config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        return _approval_gate_for_scope(
+            state,
+            config=config,
+            unit_name="calendar",
+            scope=CALENDAR_PROPOSAL_TYPES,
+        )
+
+    def _execute_mutations_for_scope(
+        state: CalendarAgentState,
+        config: RunnableConfig | None = None,
+        *,
+        scope: frozenset[str] | None,
+    ) -> dict[str, Any]:
         raw = [p for p in (state.get("pending_proposals") or []) if p.get("type") != "__clear__"]
-        props = _filter_proposals_by_scope(raw, proposal_types_scope)
+        props = _filter_proposals_by_scope(raw, scope)
         results = execute_all_proposals(
             db,
             user_id,
@@ -654,13 +905,123 @@ def build_react_assistant_graph(
             "messages": [AIMessage(content=f"Executed actions:\n{summary}")],
         }
 
+    def execute_email_mutations(
+        state: CalendarAgentState, config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        return _execute_mutations_for_scope(
+            state,
+            config=config,
+            scope=GMAIL_PROPOSAL_TYPES,
+        )
+
+    def execute_calendar_mutations(
+        state: CalendarAgentState, config: RunnableConfig | None = None
+    ) -> dict[str, Any]:
+        return _execute_mutations_for_scope(
+            state,
+            config=config,
+            scope=CALENDAR_PROPOSAL_TYPES,
+        )
+
     def graceful_stop(
         _state: CalendarAgentState, config: RunnableConfig | None = None
     ) -> dict[str, Any]:
         return {}
 
-    def _route_from_agent(state: CalendarAgentState) -> Literal["tools", "approval_gate", "__end__"]:
-        dest = route_from_agent_scoped(state, proposal_types_scope=proposal_types_scope)
+    def _latest_human_text(state: CalendarAgentState) -> str:
+        for m in reversed(state.get("messages") or []):
+            if isinstance(m, HumanMessage):
+                return _message_content_text(m)
+        return ""
+
+    def _latest_human_with_index(state: CalendarAgentState) -> tuple[int, str] | None:
+        msgs = state.get("messages") or []
+        for idx in range(len(msgs) - 1, -1, -1):
+            m = msgs[idx]
+            if isinstance(m, HumanMessage):
+                return idx, _message_content_text(m)
+        return None
+
+    def _normalize_plan_steps(raw_steps: Any) -> list[Literal["email_agent", "calendar_agent"]]:
+        out: list[Literal["email_agent", "calendar_agent"]] = []
+        for raw in raw_steps if isinstance(raw_steps, list) else []:
+            s = str(raw).strip().lower()
+            if s in {"email_agent", "email", "gmail"} and "email_agent" not in out:
+                out.append("email_agent")
+            elif s in {"calendar_agent", "calendar"} and "calendar_agent" not in out:
+                out.append("calendar_agent")
+        return out
+
+    def _heuristic_plan_for_text(text: str) -> list[Literal["email_agent", "calendar_agent"]]:
+        low = text.lower()
+        email_score = sum(
+            1
+            for tok in ("email", "gmail", "inbox", "draft", "subject", "send mail", "compose", "notify")
+            if tok in low
+        )
+        calendar_score = sum(
+            1
+            for tok in ("calendar", "event", "meeting", "schedule", "reschedule", "time slot", "busy", "call")
+            if tok in low
+        )
+        if email_score > 0 and calendar_score > 0:
+            return ["calendar_agent", "email_agent"]
+        if calendar_score > 0:
+            return ["calendar_agent"]
+        if email_score > 0:
+            return ["email_agent"]
+        return []
+
+    def _latest_conversation_message(state: CalendarAgentState) -> Any | None:
+        for m in reversed(state.get("messages") or []):
+            if isinstance(m, (AIMessage, HumanMessage, ToolMessage)):
+                return m
+        return None
+
+    def _route_to_task_agent(
+        state: CalendarAgentState,
+    ) -> Literal["email_agent", "calendar_agent", "__end__"]:
+        route_hint = state.get("task_agent_route")
+        if route_hint in {"email_agent", "calendar_agent", "__end__"}:
+            return route_hint
+        latest_msg = _latest_conversation_message(state)
+        if not isinstance(latest_msg, HumanMessage):
+            return "__end__"
+
+        if not email_available and not calendar_available:
+            return "__end__"
+        if email_available and not calendar_available:
+            return "email_agent"
+        if calendar_available and not email_available:
+            return "calendar_agent"
+
+        pending = [p for p in (state.get("pending_proposals") or []) if p.get("type") not in (None, "__clear__")]
+        if any(p.get("type") in GMAIL_PROPOSAL_TYPES for p in pending):
+            return "email_agent"
+        if any(p.get("type") in CALENDAR_PROPOSAL_TYPES for p in pending):
+            return "calendar_agent"
+
+        text = _latest_human_text(state).lower()
+        email_score = sum(
+            1
+            for tok in ("email", "gmail", "inbox", "draft", "subject", "send mail", "compose")
+            if tok in text
+        )
+        calendar_score = sum(
+            1
+            for tok in ("calendar", "event", "meeting", "schedule", "reschedule", "time slot", "busy")
+            if tok in text
+        )
+        if email_score > calendar_score:
+            return "email_agent"
+        if calendar_score > email_score:
+            return "calendar_agent"
+        return _domain_default()
+
+    def _route_from_agent_for_scope(
+        state: CalendarAgentState, *, scope: frozenset[str] | None
+    ) -> Literal["tools", "approval_gate", "__end__"]:
+        dest = route_from_agent_scoped(state, proposal_types_scope=scope)
         n_props = len(
             [
                 p
@@ -677,45 +1038,151 @@ def build_react_assistant_graph(
         )
         return dest
 
+    def _route_from_email_agent(
+        state: CalendarAgentState,
+    ) -> Literal["email_tools", "email_approval_gate", "main_agent"]:
+        out = _route_from_agent_for_scope(state, scope=GMAIL_PROPOSAL_TYPES)
+        if out == "tools":
+            return "email_tools"
+        if out == "approval_gate":
+            return "email_approval_gate"
+        return "main_agent"
+
+    def _route_from_calendar_agent(
+        state: CalendarAgentState,
+    ) -> Literal["calendar_tools", "calendar_approval_gate", "main_agent"]:
+        out = _route_from_agent_for_scope(state, scope=CALENDAR_PROPOSAL_TYPES)
+        if out == "tools":
+            return "calendar_tools"
+        if out == "approval_gate":
+            return "calendar_approval_gate"
+        return "main_agent"
+
+    def _route_after_email_tools(
+        state: CalendarAgentState,
+    ) -> Literal["graceful_stop", "email_agent", "main_agent"]:
+        out = route_after_tools_domain(state)
+        if out == "graceful_stop":
+            return "graceful_stop"
+        if out == "continue_domain":
+            return "email_agent"
+        return "main_agent"
+
+    def _route_after_calendar_tools(
+        state: CalendarAgentState,
+    ) -> Literal["graceful_stop", "calendar_agent", "main_agent"]:
+        out = route_after_tools_domain(state)
+        if out == "graceful_stop":
+            return "graceful_stop"
+        if out == "continue_domain":
+            return "calendar_agent"
+        return "main_agent"
+
+    def _route_after_email_approval(
+        state: CalendarAgentState,
+    ) -> Literal["execute_email_mutations", "email_agent", "main_agent"]:
+        out = route_after_approval_domain(state)
+        if out == "execute_mutations":
+            return "execute_email_mutations"
+        if out == "continue_domain":
+            return "email_agent"
+        return "main_agent"
+
+    def _route_after_calendar_approval(
+        state: CalendarAgentState,
+    ) -> Literal["execute_calendar_mutations", "calendar_agent", "main_agent"]:
+        out = route_after_approval_domain(state)
+        if out == "execute_mutations":
+            return "execute_calendar_mutations"
+        if out == "continue_domain":
+            return "calendar_agent"
+        return "main_agent"
+
     graph = StateGraph(CalendarAgentState)
-    graph.add_node("agent", call_model)
-    graph.add_node("tools", tool_node)
-    graph.add_node("after_tools", after_tools)
-    graph.add_node("approval_gate", approval_gate)
-    graph.add_node("execute_mutations", execute_mutations)
+    graph.add_node("main_agent", call_main_agent)
+    graph.add_node("email_agent", call_email_model)
+    graph.add_node("calendar_agent", call_calendar_model)
+    graph.add_node("email_tools", email_tool_node)
+    graph.add_node("calendar_tools", calendar_tool_node)
+    graph.add_node("email_after_tools", after_tools)
+    graph.add_node("calendar_after_tools", after_tools)
+    graph.add_node("email_approval_gate", email_approval_gate)
+    graph.add_node("calendar_approval_gate", calendar_approval_gate)
+    graph.add_node("execute_email_mutations", execute_email_mutations)
+    graph.add_node("execute_calendar_mutations", execute_calendar_mutations)
     graph.add_node("graceful_stop", graceful_stop)
 
-    graph.add_edge(START, "agent")
+    graph.add_edge(START, "main_agent")
     graph.add_conditional_edges(
-        "agent",
-        _route_from_agent,
+        "main_agent",
+        _route_to_task_agent,
         {
-            "tools": "tools",
-            "approval_gate": "approval_gate",
+            "email_agent": "email_agent",
+            "calendar_agent": "calendar_agent",
             "__end__": END,
         },
     )
-    graph.add_edge("tools", "after_tools")
-    graph.add_conditional_edges(
-        "after_tools",
-        route_after_tools,
-        {
-            "graceful_stop": "graceful_stop",
-            "agent": "agent",
-            "end_turn": END,
-        },
-    )
-    graph.add_edge("graceful_stop", END)
 
     graph.add_conditional_edges(
-        "approval_gate",
-        route_after_approval,
+        "email_agent",
+        _route_from_email_agent,
         {
-            "execute_mutations": "execute_mutations",
-            "agent": "agent",
-            "__end__": END,
+            "email_tools": "email_tools",
+            "email_approval_gate": "email_approval_gate",
+            "main_agent": "main_agent",
         },
     )
-    graph.add_edge("execute_mutations", END)
+    graph.add_conditional_edges(
+        "calendar_agent",
+        _route_from_calendar_agent,
+        {
+            "calendar_tools": "calendar_tools",
+            "calendar_approval_gate": "calendar_approval_gate",
+            "main_agent": "main_agent",
+        },
+    )
+
+    graph.add_edge("email_tools", "email_after_tools")
+    graph.add_edge("calendar_tools", "calendar_after_tools")
+    graph.add_conditional_edges(
+        "email_after_tools",
+        _route_after_email_tools,
+        {
+            "graceful_stop": "graceful_stop",
+            "email_agent": "email_agent",
+            "main_agent": "main_agent",
+        },
+    )
+    graph.add_conditional_edges(
+        "calendar_after_tools",
+        _route_after_calendar_tools,
+        {
+            "graceful_stop": "graceful_stop",
+            "calendar_agent": "calendar_agent",
+            "main_agent": "main_agent",
+        },
+    )
+
+    graph.add_conditional_edges(
+        "email_approval_gate",
+        _route_after_email_approval,
+        {
+            "execute_email_mutations": "execute_email_mutations",
+            "email_agent": "email_agent",
+            "main_agent": "main_agent",
+        },
+    )
+    graph.add_conditional_edges(
+        "calendar_approval_gate",
+        _route_after_calendar_approval,
+        {
+            "execute_calendar_mutations": "execute_calendar_mutations",
+            "calendar_agent": "calendar_agent",
+            "main_agent": "main_agent",
+        },
+    )
+    graph.add_edge("execute_email_mutations", "main_agent")
+    graph.add_edge("execute_calendar_mutations", "main_agent")
+    graph.add_edge("graceful_stop", END)
 
     return graph.compile(checkpointer=checkpointer)
