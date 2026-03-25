@@ -150,6 +150,16 @@ def _fmt_participants(p: dict[str, Any]) -> str:
     return str(raw).strip()
 
 
+def _fmt_event_link(p: dict[str, Any]) -> str:
+    raw = p.get("event_link")
+    if not isinstance(raw, str):
+        return "—"
+    link = raw.strip()
+    if not link:
+        return "—"
+    return f"[Open calendar event]({link})"
+
+
 def _message_role_label(msg: Any) -> str:
     if isinstance(msg, HumanMessage):
         return "User"
@@ -245,7 +255,9 @@ def _format_calendar_create_block(p: dict[str, Any]) -> str:
         "End Time\n"
         f"{end_line}\n\n"
         "Participants\n"
-        f"{_fmt_participants(p)}"
+        f"{_fmt_participants(p)}\n\n"
+        "Event\n"
+        f"{_fmt_event_link(p)}"
     )
 
 
@@ -268,7 +280,9 @@ def _format_calendar_update_block(p: dict[str, Any]) -> str:
         "End Time\n"
         f"{end_line}\n\n"
         "Participants\n"
-        f"{_fmt_participants(p)}"
+        f"{_fmt_participants(p)}\n\n"
+        "Event\n"
+        f"{_fmt_event_link(p)}"
     )
 
 
@@ -291,7 +305,9 @@ def _format_calendar_delete_block(p: dict[str, Any]) -> str:
         "End Time\n"
         f"{end_line}\n\n"
         "Participants\n"
-        f"{_fmt_participants(p)}"
+        f"{_fmt_participants(p)}\n\n"
+        "Event\n"
+        f"{_fmt_event_link(p)}"
     )
 
 

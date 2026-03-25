@@ -18,29 +18,50 @@ from app.services import calendar_client
 CALENDAR_PROPOSAL_TYPES = frozenset({"create_event", "update_event", "delete_event"})
 
 
-def _ensure_event_exists(
+def _load_event(
     db: Session,
     user_id: int,
     settings: Settings,
     *,
     event_id: str,
     calendar_id: str,
-) -> str | None:
-    """Return error message if the event cannot be loaded; None if OK."""
+) -> tuple[dict | None, str | None]:
+    """Load an event for display/planning; returns (event, error)."""
     try:
-        calendar_client.get_event(
+        ev = calendar_client.get_event(
             db, user_id, settings, event_id=event_id, calendar_id=calendar_id
         )
+        return ev, None
     except HttpError as e:
         if getattr(e.resp, "status", None) == 404:
             return (
+                None,
                 f"No calendar event exists for id {event_id!r} in calendar {calendar_id!r}. "
-                "Use list_calendar_events or get_calendar_event to obtain a valid id."
+                "Use list_calendar_events or get_calendar_event to obtain a valid id.",
             )
-        return format_tool_error(e)
+        return None, format_tool_error(e)
     except Exception as e:
-        return format_tool_error(e)
-    return None
+        return None, format_tool_error(e)
+
+
+def _event_to_proposal_fields(ev: dict) -> dict:
+    start = (ev.get("start") or {}) if isinstance(ev.get("start"), dict) else {}
+    end = (ev.get("end") or {}) if isinstance(ev.get("end"), dict) else {}
+    attendees = ev.get("attendees") if isinstance(ev.get("attendees"), list) else []
+    participant_emails = ", ".join(
+        str(a.get("email")).strip()
+        for a in attendees
+        if isinstance(a, dict) and str(a.get("email") or "").strip()
+    )
+    return {
+        "summary": ev.get("summary"),
+        "description": ev.get("description"),
+        "start_datetime": start.get("dateTime") or start.get("date"),
+        "end_datetime": end.get("dateTime") or end.get("date"),
+        "timezone": start.get("timeZone") or end.get("timeZone"),
+        "attendees": participant_emails or None,
+        "event_link": ev.get("htmlLink"),
+    }
 
 
 def build_calendar_proposal_tools(
@@ -250,15 +271,16 @@ def build_calendar_proposal_tools(
         attendees: str | None = None,
     ) -> Command:
         """Queue updating an event that already exists on Google Calendar. If changing times, pass both start and end RFC3339 datetimes."""
-        missing = _ensure_event_exists(
-            db, user_id, settings, event_id=event_id.strip(), calendar_id=calendar_id
+        eid = event_id.strip()
+        existing, missing = _load_event(
+            db, user_id, settings, event_id=eid, calendar_id=calendar_id
         )
-        if missing:
+        if missing or not existing:
             return Command(
                 update={
                     "messages": [
                         ToolMessage(
-                            content=missing,
+                            content=missing or "Unable to load existing event.",
                             tool_call_id=runtime.tool_call_id or "",
                         )
                     ]
@@ -276,17 +298,27 @@ def build_calendar_proposal_tools(
                 }
             )
         pid = str(uuid.uuid4())
+        existing_fields = _event_to_proposal_fields(existing)
         proposal: dict = {
             "type": "update_event",
             "id": pid,
-            "event_id": event_id.strip(),
-            "summary": summary,
-            "description": description,
-            "start_datetime": start_datetime,
-            "end_datetime": end_datetime,
-            "timezone": timezone,
+            "event_id": eid,
+            # Show final values in approval UI: requested updates override existing values.
+            "summary": summary if summary is not None else existing_fields.get("summary"),
+            "description": (
+                description if description is not None else existing_fields.get("description")
+            ),
+            "start_datetime": (
+                start_datetime
+                if start_datetime is not None
+                else existing_fields.get("start_datetime")
+            ),
+            "end_datetime": (
+                end_datetime if end_datetime is not None else existing_fields.get("end_datetime")
+            ),
+            "timezone": timezone if timezone is not None else existing_fields.get("timezone"),
             "calendar_id": calendar_id,
-            "attendees": attendees,
+            "attendees": attendees if attendees is not None else existing_fields.get("attendees"),
         }
         return Command(
             update={
@@ -306,26 +338,34 @@ def build_calendar_proposal_tools(
         calendar_id: str = "primary",
     ) -> Command:
         """Queue deleting a calendar event that exists on Google Calendar (requires approval)."""
-        missing = _ensure_event_exists(
-            db, user_id, settings, event_id=event_id.strip(), calendar_id=calendar_id
+        eid = event_id.strip()
+        existing, missing = _load_event(
+            db, user_id, settings, event_id=eid, calendar_id=calendar_id
         )
-        if missing:
+        if missing or not existing:
             return Command(
                 update={
                     "messages": [
                         ToolMessage(
-                            content=missing,
+                            content=missing or "Unable to load existing event.",
                             tool_call_id=runtime.tool_call_id or "",
                         )
                     ]
                 }
             )
         pid = str(uuid.uuid4())
+        existing_fields = _event_to_proposal_fields(existing)
         proposal: dict = {
             "type": "delete_event",
             "id": pid,
-            "event_id": event_id.strip(),
+            "event_id": eid,
             "calendar_id": calendar_id,
+            "summary": existing_fields.get("summary"),
+            "description": existing_fields.get("description"),
+            "start_datetime": existing_fields.get("start_datetime"),
+            "end_datetime": existing_fields.get("end_datetime"),
+            "timezone": existing_fields.get("timezone"),
+            "attendees": existing_fields.get("attendees"),
         }
         return Command(
             update={

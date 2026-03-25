@@ -90,7 +90,13 @@ def execute_proposal(
                 calendar_id=proposal.get("calendar_id") or "primary",
                 conference_data_version=1,
             )
-            return {"ok": True, "proposal_id": pid, "detail": "Event created", "result": out}
+            return {
+                "ok": True,
+                "proposal_id": pid,
+                "type": ptype,
+                "detail": "Event created",
+                "result": out,
+            }
 
         if ptype == "update_event":
             cal_id = proposal.get("calendar_id") or "primary"
@@ -122,21 +128,36 @@ def execute_proposal(
                 body=current,
                 calendar_id=cal_id,
             )
-            return {"ok": True, "proposal_id": pid, "detail": "Event updated", "result": out}
+            return {
+                "ok": True,
+                "proposal_id": pid,
+                "type": ptype,
+                "detail": "Event updated",
+                "result": out,
+            }
 
         if ptype == "delete_event":
+            cal_id = proposal.get("calendar_id") or "primary"
+            existing = calendar_client.get_event(
+                db,
+                user_id,
+                settings,
+                event_id=proposal["event_id"],
+                calendar_id=cal_id,
+            )
             calendar_client.delete_event(
                 db,
                 user_id,
                 settings,
                 event_id=proposal["event_id"],
-                calendar_id=proposal.get("calendar_id") or "primary",
+                calendar_id=cal_id,
             )
             return {
                 "ok": True,
                 "proposal_id": pid,
+                "type": ptype,
                 "detail": "Event deleted",
-                "result": {"deleted_event_id": proposal["event_id"]},
+                "result": existing,
             }
 
         if ptype == "create_email_draft":
@@ -148,7 +169,13 @@ def execute_proposal(
                 subject=proposal["subject"],
                 body=proposal["body"],
             )
-            return {"ok": True, "proposal_id": pid, "detail": "Draft created", "result": out}
+            return {
+                "ok": True,
+                "proposal_id": pid,
+                "type": ptype,
+                "detail": "Draft created",
+                "result": out,
+            }
 
         if ptype == "send_email":
             out = gmail_client.send_email(
@@ -159,20 +186,45 @@ def execute_proposal(
                 subject=proposal["subject"],
                 body=proposal["body"],
             )
-            return {"ok": True, "proposal_id": pid, "detail": "Email sent", "result": out}
+            return {
+                "ok": True,
+                "proposal_id": pid,
+                "type": ptype,
+                "detail": "Email sent",
+                "result": out,
+            }
 
         return {
             "ok": False,
             "proposal_id": pid,
+            "type": ptype,
             "detail": f"Unknown proposal type: {ptype}",
             "result": None,
         }
     except ReauthRequiredError as e:
-        return {"ok": False, "proposal_id": pid, "detail": str(e), "result": None}
+        return {
+            "ok": False,
+            "proposal_id": pid,
+            "type": ptype,
+            "detail": str(e),
+            "result": None,
+        }
     except HttpError as e:
-        return {"ok": False, "proposal_id": pid, "detail": _http_err(e), "result": None}
+        return {
+            "ok": False,
+            "proposal_id": pid,
+            "type": ptype,
+            "detail": _http_err(e),
+            "result": None,
+        }
     except Exception as e:
-        return {"ok": False, "proposal_id": pid, "detail": str(e), "result": None}
+        return {
+            "ok": False,
+            "proposal_id": pid,
+            "type": ptype,
+            "detail": str(e),
+            "result": None,
+        }
 
 
 def execute_all_proposals(
@@ -196,9 +248,85 @@ def execute_all_proposals(
     ]
 
 
+def _event_dt(ev: dict[str, Any], key: str) -> str:
+    node = ev.get(key) or {}
+    if not isinstance(node, dict):
+        return "—"
+    dt = node.get("dateTime") or node.get("date")
+    tz = node.get("timeZone")
+    if not dt:
+        return "—"
+    return f"{dt} ({tz})" if tz else str(dt)
+
+
+def _event_participants(ev: dict[str, Any]) -> str:
+    atts = ev.get("attendees")
+    if not isinstance(atts, list):
+        return "—"
+    emails = [str(a.get("email")).strip() for a in atts if isinstance(a, dict) and a.get("email")]
+    return ", ".join(emails) if emails else "—"
+
+
+def _event_meeting_link(ev: dict[str, Any]) -> str:
+    if ev.get("hangoutLink"):
+        return str(ev["hangoutLink"])
+    conf = ev.get("conferenceData") or {}
+    if isinstance(conf, dict):
+        entries = conf.get("entryPoints") or []
+        if isinstance(entries, list):
+            for ep in entries:
+                if isinstance(ep, dict) and ep.get("entryPointType") == "video" and ep.get("uri"):
+                    return str(ep["uri"])
+    return "—"
+
+
+def _event_page_link(ev: dict[str, Any]) -> str:
+    raw = ev.get("htmlLink")
+    if not isinstance(raw, str):
+        return "—"
+    link = raw.strip()
+    if not link:
+        return "—"
+    return f"[Open calendar event]({link})"
+
+
+def _format_call_details(title: str, ev: dict[str, Any]) -> str:
+    return (
+        f"{title}\n"
+        f"Title: {ev.get('summary') or '—'}\n"
+        f"Summary: {ev.get('description') or '—'}\n"
+        f"Start: {_event_dt(ev, 'start')}\n"
+        f"End: {_event_dt(ev, 'end')}\n"
+        f"Participants: {_event_participants(ev)}\n"
+        f"Event: {_event_page_link(ev)}\n"
+        f"Meeting link: {_event_meeting_link(ev)}"
+    )
+
+
 def format_execution_summary(results: list[dict[str, Any]]) -> str:
-    lines = []
+    blocks: list[str] = []
     for r in results:
-        status = "ok" if r.get("ok") else "failed"
-        lines.append(f"- [{status}] {r.get('proposal_id')}: {r.get('detail')}")
-    return "\n".join(lines) if lines else "No actions executed."
+        action = r.get("type")
+        if not r.get("ok"):
+            blocks.append(f"Could not complete action: {r.get('detail')}")
+            continue
+
+        result = r.get("result")
+        if action == "create_event" and isinstance(result, dict):
+            blocks.append(_format_call_details("Call scheduled successfully.", result))
+            continue
+        if action == "update_event" and isinstance(result, dict):
+            blocks.append(_format_call_details("Call updated successfully.", result))
+            continue
+        if action == "delete_event" and isinstance(result, dict):
+            blocks.append(_format_call_details("Call cancelled successfully.", result))
+            continue
+        if action == "create_email_draft":
+            blocks.append("Email draft created successfully.")
+            continue
+        if action == "send_email":
+            blocks.append("Email sent successfully.")
+            continue
+
+        blocks.append(str(r.get("detail") or "Action completed."))
+    return "\n\n".join(blocks) if blocks else "No actions executed."
