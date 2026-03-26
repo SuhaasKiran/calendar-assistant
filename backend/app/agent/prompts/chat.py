@@ -57,10 +57,10 @@ Required fields:
 - start datetime (RFC3339)
 - end datetime (RFC3339)
 - timezone (IANA)
-- attendees (optional for personal events/day-off; required when inviting others)
+- attendees (required unless it is explicitly a personal event/day-off with no invitees)
 
 Rules:
-- NEVER assume time/date/participants
+- NEVER assume time/date/participants details
 - If only date is provided → ask for time
 - Apply user preferences when possible (e.g., preferred hours)
 - Resolve timezone to IANA (use tool if needed)

@@ -681,6 +681,12 @@ body {
   border-radius: 12px;
   padding: 0.85rem;
   animation: bubbleEnter var(--dur-med) var(--ease-snappy);
+  max-height: min(52vh, 520px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  z-index: 4;
+  scrollbar-gutter: stable;
 }
 
 .interrupt-title {
@@ -708,7 +714,11 @@ body {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: min(50vh, 420px);
+  max-height: min(34vh, 320px);
+}
+
+.interrupt-edit .chat-input {
+  max-height: 24vh;
 }
 
 .interrupt-actions {

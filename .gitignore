@@ -1,0 +1,30 @@
+# Local environment and secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python artifacts
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+
+# Frontend/node artifacts
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# Runtime databases and checkpoints (keep local only)
+backend/app/db/databases/*.db
+backend/app/agent/db/*.sqlite
+backend/app/agent/db/*.sqlite-*
+app/agent/db/*.sqlite
+app/agent/db/*.sqlite-*
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+backend/.env

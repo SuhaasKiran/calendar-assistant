@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -316,15 +318,62 @@ def execute_all_proposals(
     ]
 
 
+def _parse_iso_datetime(raw: Any) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    # Python's fromisoformat does not accept trailing "Z" in older versions.
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _parse_iso_date(raw: Any) -> date | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _event_dt_human(raw_dt: Any, tz_name: Any) -> str:
+    dt = _parse_iso_datetime(raw_dt)
+    if dt is None:
+        return "—"
+
+    tz_text = str(tz_name or "").strip()
+    if tz_text:
+        try:
+            zone = ZoneInfo(tz_text)
+            dt = dt.replace(tzinfo=zone) if dt.tzinfo is None else dt.astimezone(zone)
+            return f"{dt.strftime('%a, %b %d, %Y at %I:%M %p %Z')} ({tz_text})"
+        except Exception:
+            # If timezone label is invalid, fall back to parsed datetime without crashing.
+            pass
+
+    return dt.strftime("%a, %b %d, %Y at %I:%M %p %Z").strip()
+
+
 def _event_dt(ev: dict[str, Any], key: str) -> str:
     node = ev.get(key) or {}
     if not isinstance(node, dict):
         return "—"
-    dt = node.get("dateTime") or node.get("date")
-    tz = node.get("timeZone")
-    if not dt:
+    dt_raw = node.get("dateTime")
+    if dt_raw:
+        return _event_dt_human(dt_raw, node.get("timeZone"))
+
+    d_raw = node.get("date")
+    if not d_raw:
         return "—"
-    return f"{dt} ({tz})" if tz else str(dt)
+    d = _parse_iso_date(d_raw)
+    if d is None:
+        return str(d_raw)
+    return d.strftime("%a, %b %d, %Y")
 
 
 def _event_participants(ev: dict[str, Any]) -> str:
