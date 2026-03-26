@@ -5,6 +5,7 @@ Chat: LangGraph calendar assistant with SSE and HITL resume.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Annotated
 
@@ -18,13 +19,17 @@ from sqlalchemy.orm import Session
 from app.agent.graphs.chat_agent import build_chat_agent
 from app.agent.graphs.state import PROPOSAL_CLEAR
 from app.agent.streaming.graph_stream import stream_graph_sse
+from app.agent.tools.execution import format_execution_summary
 from app.config import get_settings
+from app.core.request_context import get_request_id
+from app.core.safety import enforce_user_message_safety
 from app.db.models import Conversation, Message, MessageRole, User
 from app.db.session import get_db
 from app.deps import get_current_user
 from app.schemas.chat import ChatRequest, ConversationListItem, MessageItem
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 RECURSION_LIMIT = 50
 
@@ -179,6 +184,7 @@ def chat_turn(
     else:
         assert body.message is not None
         user_text = body.message.strip()
+        enforce_user_message_safety(user_text, settings)
         db.add(
             Message(
                 conversation_id=conv.id,
@@ -220,33 +226,53 @@ def chat_turn(
     interrupted = {"flag": False}
 
     def sse():
-        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conv.id})}\n\n"
-        for line in stream_graph_sse(graph, input=stream_input, config=config):
-            try:
-                evt = json.loads(line.strip())
-                if evt.get("type") == "interrupt":
-                    interrupted["flag"] = True
-            except json.JSONDecodeError:
-                pass
-            yield f"data: {line}\n"
-        if interrupted["flag"]:
-            return
-        snap = graph.get_state(config)
-        msgs = (snap.values or {}).get("messages") or []
-        text = ""
-        for m in reversed(msgs):
-            if isinstance(m, AIMessage) and m.content and not m.tool_calls:
-                c = m.content
-                text = c if isinstance(c, str) else str(c)
-                break
-        if text:
-            db.add(
-                Message(
-                    conversation_id=conv.id,
-                    role=MessageRole.assistant,
-                    content=text,
+        request_id = get_request_id()
+        yield (
+            f"data: {json.dumps({'type': 'meta', 'conversation_id': conv.id, 'request_id': request_id})}\n\n"
+        )
+        try:
+            for line in stream_graph_sse(graph, input=stream_input, config=config):
+                try:
+                    evt = json.loads(line.strip())
+                    if evt.get("type") == "interrupt":
+                        interrupted["flag"] = True
+                except json.JSONDecodeError:
+                    pass
+                yield f"data: {line}\n"
+            if interrupted["flag"]:
+                return
+            snap = graph.get_state(config)
+            values = snap.values or {}
+            msgs = values.get("messages") or []
+            results = values.get("last_execution_results") or []
+            text = ""
+            for m in reversed(msgs):
+                if isinstance(m, AIMessage) and m.content and not m.tool_calls:
+                    c = m.content
+                    text = c if isinstance(c, str) else str(c)
+                    break
+            if not text and isinstance(results, list) and results:
+                summary = format_execution_summary(results)
+                if summary.strip():
+                    text = f"Executed actions:\n{summary}"
+            if text:
+                db.add(
+                    Message(
+                        conversation_id=conv.id,
+                        role=MessageRole.assistant,
+                        content=text,
+                    )
                 )
-            )
-            db.commit()
+                db.commit()
+        except Exception:
+            logger.exception("chat stream failed conversation_id=%s request_id=%s", conv.id, request_id)
+            err = {
+                "type": "error",
+                "message": "Something went wrong on our side. Please try again.",
+                "code": "CHAT_STREAM_FAILURE",
+                "request_id": request_id,
+                "retryable": True,
+            }
+            yield f"data: {json.dumps(err)}\n\n"
 
     return StreamingResponse(sse(), media_type="text/event-stream")

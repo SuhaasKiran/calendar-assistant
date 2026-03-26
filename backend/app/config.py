@@ -50,6 +50,43 @@ class Settings(BaseSettings):
     google_http_timeout_seconds: float = 30.0
     google_api_max_retries: int = 3
     google_api_retry_base_delay_seconds: float = 0.5
+    google_api_retry_max_delay_seconds: float = 8.0
+
+    # LLM reliability
+    llm_max_retries: int = 2
+    llm_request_timeout_seconds: float = 45.0
+
+    # Chat/API resilience
+    chat_stream_timeout_seconds: float = 90.0
+    api_retry_budget_per_request: int = 6
+    reliability_features_enabled: bool = True
+
+    # Safety controls
+    safety_guard_enabled: bool = True
+    safety_guard_strict_block: bool = True
+    safety_max_input_chars: int = 6000
+    safety_blocked_terms: str = (
+        "ignore previous instructions,"
+        "reveal system prompt,"
+        "developer message,"
+        "exfiltrate,"
+        "steal credentials,"
+        "malware,"
+        "ransomware,"
+        "phishing,"
+        "social security number,"
+        "credit card number"
+    )
+    safety_email_blocked_terms: str = (
+        "wire transfer,"
+        "bank account password,"
+        "gift cards,"
+        "crypto seed phrase,"
+        "bypass security"
+    )
+    send_email_allowed_domains: str = ""
+    send_email_blocked_domains: str = ""
+    send_email_require_confirmation: bool = True
 
     session_cookie_name: str = "session"
     session_cookie_max_age_seconds: int = 60 * 60 * 24 * 7  # 7 days
@@ -77,6 +114,22 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def safety_blocked_terms_list(self) -> list[str]:
+        return [t.strip().lower() for t in self.safety_blocked_terms.split(",") if t.strip()]
+
+    @property
+    def safety_email_blocked_terms_list(self) -> list[str]:
+        return [t.strip().lower() for t in self.safety_email_blocked_terms.split(",") if t.strip()]
+
+    @property
+    def send_email_allowed_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.send_email_allowed_domains.split(",") if d.strip()]
+
+    @property
+    def send_email_blocked_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.send_email_blocked_domains.split(",") if d.strip()]
 
 
 @lru_cache

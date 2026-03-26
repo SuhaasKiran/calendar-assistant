@@ -8,8 +8,10 @@ import json
 import logging
 from collections.abc import Iterator
 from typing import Any
+from langgraph.types import Command
 
 from langchain_core.messages import AIMessage
+from app.core.request_context import get_request_id
 
 logger = logging.getLogger(__name__)
 GENERIC_STREAM_ERROR_MESSAGE = "Something went wrong on our side. Please try again."
@@ -66,6 +68,14 @@ def stream_graph_sse(
     except Exception:
         logger.exception("Failed while streaming graph SSE response")
         yield (
-            json.dumps({"type": "error", "message": GENERIC_STREAM_ERROR_MESSAGE})
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": GENERIC_STREAM_ERROR_MESSAGE,
+                    "code": "STREAM_FAILURE",
+                    "request_id": get_request_id(),
+                    "retryable": True,
+                }
+            )
             + "\n"
         )

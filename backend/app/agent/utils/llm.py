@@ -30,6 +30,7 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
             model=settings.openai_model,
             api_key=settings.openai_api_key,
             temperature=temperature,
+            timeout=settings.llm_request_timeout_seconds,
         )
 
     if provider == "anthropic":
@@ -41,6 +42,7 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
             model=settings.anthropic_model,
             api_key=settings.anthropic_api_key,
             temperature=temperature,
+            timeout=settings.llm_request_timeout_seconds,
         )
 
     if provider == "ollama":
@@ -48,6 +50,7 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
             model=settings.ollama_model,
             base_url=settings.ollama_base_url,
             temperature=temperature,
+            timeout=settings.llm_request_timeout_seconds,
         )
 
     raise RuntimeError(

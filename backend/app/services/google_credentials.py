@@ -9,8 +9,7 @@ Shared by `calendar_client`, `gmail_client`, and agent tools.
 
 from __future__ import annotations
 
-import random
-import time
+import logging
 from collections.abc import Callable
 from typing import TypeVar
 
@@ -25,10 +24,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.core.resilience import call_with_retry
 from app.db.models import OAuthToken
 from app.services.google_oauth import GOOGLE_SCOPES, credentials_expiry_utc
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 class ReauthRequiredError(Exception):
@@ -116,15 +117,33 @@ def google_api_call_with_retry(
 
     Retries HTTP 429 and 5xx from HttpError, with exponential backoff.
     """
-    max_attempts = max(1, settings.google_api_max_retries)
-    base = settings.google_api_retry_base_delay_seconds
-    for attempt in range(max_attempts):
-        try:
-            return fn()
-        except HttpError as e:
-            status = e.resp.status
-            retryable = status in (429, 500, 502, 503, 504)
-            if not retryable or attempt == max_attempts - 1:
-                raise
-            delay = base * (2**attempt) + random.uniform(0, 0.1)
-            time.sleep(delay)
+    if not settings.reliability_features_enabled:
+        return fn()
+
+    def _is_retryable(exc: Exception) -> bool:
+        if not isinstance(exc, HttpError):
+            return False
+        status = exc.resp.status
+        return status in (429, 500, 502, 503, 504)
+
+    attempts = 0
+
+    def _wrapped() -> T:
+        nonlocal attempts
+        attempts += 1
+        return fn()
+
+    try:
+        out = call_with_retry(
+            _wrapped,
+            max_attempts=max(1, settings.google_api_max_retries),
+            base_delay_seconds=settings.google_api_retry_base_delay_seconds,
+            max_delay_seconds=settings.google_api_retry_max_delay_seconds,
+            is_retryable_error=_is_retryable,
+        )
+        if attempts > 1:
+            logger.warning("google_api_recovered_after_retries attempts=%s", attempts)
+        return out
+    except Exception:
+        logger.exception("google_api_call_failed attempts=%s", attempts)
+        raise

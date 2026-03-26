@@ -687,10 +687,19 @@ def build_react_assistant_graph(
             default_timezone=default_timezone,
             proposals=props,
         )
+        ok_count = sum(1 for r in results if r.get("ok"))
+        fail_count = len(results) - ok_count
+        logger.info(
+            "execute_mutations graph=%s user_id=%s proposals=%s ok=%s failed=%s",
+            graph_name,
+            user_id,
+            len(results),
+            ok_count,
+            fail_count,
+        )
         summary = format_execution_summary(results)
-        messages: list[AIMessage] = []
-        if summary.strip():
-            messages = [AIMessage(content=f"Executed actions:\n{summary}")]
+        body = summary.strip() or "Execution completed with no user-visible result details."
+        messages: list[AIMessage] = [AIMessage(content=f"Executed actions:\n{body}")]
         return {
             "pending_proposals": [PROPOSAL_CLEAR],
             "resume_approved": None,

@@ -11,10 +11,11 @@ from pydantic import BaseModel, Field, model_validator
 class ChatRequest(BaseModel):
     """Send a user message or resume after a human-in-the-loop interrupt."""
 
-    message: str | None = None
+    message: str | None = Field(default=None, max_length=6000)
     user_preferences: str = Field(
         default="",
         description="Optional user preferences for scheduling defaults in the assistant prompt.",
+        max_length=4000,
     )
     conversation_id: str | None = Field(
         default=None,

@@ -13,6 +13,8 @@ from typing import Any
 from langchain_core.messages import AIMessageChunk
 from langchain_core.runnables import RunnableConfig
 
+from app.core.request_context import get_request_id
+
 logger = logging.getLogger(__name__)
 GENERIC_STREAM_ERROR_MESSAGE = "Something went wrong on our side. Please try again."
 
@@ -82,4 +84,10 @@ async def stream_agent_events(
         yield {"type": "done"}
     except Exception:
         logger.exception("Failed while streaming agent events")
-        yield {"type": "error", "message": GENERIC_STREAM_ERROR_MESSAGE}
+        yield {
+            "type": "error",
+            "message": GENERIC_STREAM_ERROR_MESSAGE,
+            "code": "STREAM_FAILURE",
+            "request_id": get_request_id(),
+            "retryable": True,
+        }
