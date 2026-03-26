@@ -9,7 +9,7 @@ type Props = {
 export default function ChatComposer({
   onSend,
   disabled,
-  placeholder = "Message the calendar assistant…",
+  placeholder = "Message the assistant…",
 }: Props) {
   const [text, setText] = useState("");
 

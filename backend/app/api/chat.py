@@ -13,9 +13,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.agent.graphs.checkpoint import delete_thread_checkpoints
 from app.agent.graphs.chat_agent import build_chat_agent
 from app.agent.graphs.state import PROPOSAL_CLEAR
 from app.agent.streaming.graph_stream import stream_graph_sse
@@ -127,8 +128,35 @@ def delete_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
         )
-    db.delete(conv)
-    db.commit()
+    # Clear LangGraph checkpoints tied to this conversation id.
+    # This keeps backend thread state fully removed, not just UI-visible rows.
+    try:
+        cp_deleted, writes_deleted = delete_thread_checkpoints(conversation_id)
+        logger.info(
+            "delete_conversation cleared checkpoints conversation_id=%s checkpoints=%s writes=%s",
+            conversation_id,
+            cp_deleted,
+            writes_deleted,
+        )
+    except Exception:
+        logger.exception("delete_conversation failed clearing checkpoints conversation_id=%s", conversation_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete conversation state",
+        ) from None
+
+    try:
+        # Explicit message deletion avoids relying on FK cascade behavior.
+        db.execute(delete(Message).where(Message.conversation_id == conversation_id))
+        db.delete(conv)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("delete_conversation database delete failed conversation_id=%s", conversation_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete conversation",
+        ) from None
 
 
 @router.post("")

@@ -4,10 +4,22 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Calendar Assistant</title>
+    <title>Assistant</title>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      fetch("/assistant-config.json")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((config) => {
+          const name =
+            config && typeof config.assistantName === "string"
+              ? config.assistantName.trim()
+              : "";
+          if (name) document.title = name;
+        })
+        .catch(() => {});
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

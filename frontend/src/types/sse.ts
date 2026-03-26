@@ -1,13 +1,13 @@
 /** Parsed JSON payloads from `POST /chat` SSE `data:` lines. */
 export type StreamEvent =
-  | { type: "meta"; conversation_id: string }
+  | { type: "meta"; conversation_id: string; request_id?: string }
   | {
       type: "interrupt";
       interrupts: Array<{ id: string; value: unknown }>;
     }
   | { type: "content"; text: string }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: string; request_id?: string; retryable?: boolean };
 
 export function parseStreamEvent(data: unknown): StreamEvent | null {
   if (!data || typeof data !== "object" || !("type" in data)) return null;

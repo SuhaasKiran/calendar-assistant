@@ -5,8 +5,10 @@ import {
   getConversationMessages,
   listConversations,
   postChatStream,
+  type ApiError,
   type ConversationSummary,
 } from "../api/chat";
+import { useAssistantName } from "../hooks/useAssistantName";
 import { useSession } from "../hooks/useSession";
 import type { StreamEvent } from "../types/sse";
 import ChatComposer from "./ChatComposer";
@@ -24,13 +26,31 @@ function formatThreadTime(iso: string): string {
   });
 }
 
+function preferencesStorageKey(userId: number): string {
+  return `calendar_assistant_preferences_${userId}`;
+}
+
+function uiMessageFromError(error: unknown, fallback: string): string {
+  const err = error as ApiError;
+  if (err?.code === "SAFETY_PROMPT_INJECTION_OR_HARM" || err?.code === "SAFETY_BLOCKED") {
+    return err.message || "Request blocked by safety policy.";
+  }
+  if (err?.status === 401) return "Your session expired. Please sign in again.";
+  if (err?.retryable) return `${err.message || fallback} You can retry.`;
+  return err?.message || fallback;
+}
+
 export default function ChatScreen() {
   const { user, logout } = useSession();
+  const assistantName = useAssistantName();
   const navigate = useNavigate();
   const { conversationId: routeConversationId } = useParams<{ conversationId: string }>();
   const conversationId = routeConversationId ?? null;
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [userPreferences, setUserPreferences] = useState("");
+  const [preferencesDraft, setPreferencesDraft] = useState("");
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [interruptPayload, setInterruptPayload] = useState<
     Array<{ id: string; value: unknown }> | null
@@ -46,13 +66,14 @@ export default function ChatScreen() {
   const abortRef = useRef<AbortController | null>(null);
   const threadsAbortRef = useRef<AbortController | null>(null);
   const skipHydrationThreadIdRef = useRef<string | null>(null);
+  const skipNextPreferencesPersistRef = useRef(true);
 
   const handleStreamEvent = useCallback(
     (evt: StreamEvent) => {
       if (evt.type === "meta") {
         if (conversationId !== evt.conversation_id) {
-          if (!conversationId && busy) {
-            // First-turn creation: keep live stream UI; avoid immediate history overwrite.
+          if (!conversationId) {
+            // New-thread first turn: keep optimistic typing bubble until content arrives.
             skipHydrationThreadIdRef.current = evt.conversation_id;
           }
           navigate(`/c/${evt.conversation_id}`, { replace: true });
@@ -67,6 +88,7 @@ export default function ChatScreen() {
         })();
       }
       if (evt.type === "content") {
+        setInterruptPayload(null);
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -82,9 +104,13 @@ export default function ChatScreen() {
         setInterruptPayload(evt.interrupts);
       }
       if (evt.type === "error") {
-        setError(evt.message);
+        const suffix = evt.request_id ? ` (ref: ${evt.request_id})` : "";
+        const retryHint = evt.retryable ? " You can retry." : "";
+        setError(`${evt.message}${retryHint}${suffix}`);
+        setInterruptPayload(null);
       }
       if (evt.type === "done") {
+        setInterruptPayload(null);
         void (async () => {
           try {
             const items = await listConversations();
@@ -95,7 +121,7 @@ export default function ChatScreen() {
         })();
       }
     },
-    [busy, conversationId, navigate],
+    [conversationId, navigate],
   );
 
   const runChat = useCallback(
@@ -105,12 +131,11 @@ export default function ChatScreen() {
       abortRef.current = ac;
       setBusy(true);
       setError(null);
-      setInterruptPayload(null);
       try {
         await postChatStream(body, handleStreamEvent, ac.signal);
       } catch (e) {
         if ((e as Error).name === "AbortError") return;
-        setError(e instanceof Error ? e.message : "Request failed");
+        setError(uiMessageFromError(e, "Request failed"));
       } finally {
         setBusy(false);
       }
@@ -131,10 +156,11 @@ export default function ChatScreen() {
       ]);
       await runChat({
         message: text,
+        user_preferences: userPreferences.trim(),
         conversation_id: conversationId,
       });
     },
-    [conversationId, historyLoading, runChat],
+    [conversationId, historyLoading, runChat, userPreferences],
   );
 
   const resumeInterrupt = useCallback(
@@ -154,10 +180,11 @@ export default function ChatScreen() {
       await runChat({
         resume: true,
         resume_value: value,
+        user_preferences: userPreferences.trim(),
         conversation_id: conversationId,
       });
     },
-    [conversationId, runChat],
+    [conversationId, runChat, userPreferences],
   );
 
   const newChat = useCallback(() => {
@@ -170,6 +197,16 @@ export default function ChatScreen() {
     navigate("/");
   }, [navigate]);
 
+  const openPreferences = useCallback(() => {
+    setPreferencesDraft(userPreferences);
+    setPreferencesOpen(true);
+  }, [userPreferences]);
+
+  const savePreferences = useCallback(() => {
+    setUserPreferences(preferencesDraft.trim());
+    setPreferencesOpen(false);
+  }, [preferencesDraft]);
+
   const refreshConversations = useCallback(async () => {
     threadsAbortRef.current?.abort();
     const ac = new AbortController();
@@ -181,7 +218,7 @@ export default function ChatScreen() {
       setConversations(items);
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
-      setThreadsError(e instanceof Error ? e.message : "Failed to load conversations");
+      setThreadsError(uiMessageFromError(e, "Failed to load conversations"));
     } finally {
       setThreadsLoading(false);
     }
@@ -213,7 +250,7 @@ export default function ChatScreen() {
         }
         await refreshConversations();
       } catch (e) {
-        setThreadsError(e instanceof Error ? e.message : "Failed to delete conversation");
+        setThreadsError(uiMessageFromError(e, "Failed to delete conversation"));
       } finally {
         setDeletingThreadId(null);
       }
@@ -223,11 +260,23 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!user) return;
+    const saved = localStorage.getItem(preferencesStorageKey(user.id));
+    skipNextPreferencesPersistRef.current = true;
+    setUserPreferences(saved ?? "");
     void refreshConversations();
     return () => {
       threadsAbortRef.current?.abort();
     };
   }, [refreshConversations, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (skipNextPreferencesPersistRef.current) {
+      skipNextPreferencesPersistRef.current = false;
+      return;
+    }
+    localStorage.setItem(preferencesStorageKey(user.id), userPreferences);
+  }, [user, userPreferences]);
 
   useEffect(() => {
     setInterruptPayload(null);
@@ -257,7 +306,7 @@ export default function ChatScreen() {
         setMessages(mapped);
       } catch (e) {
         if ((e as Error).name === "AbortError") return;
-        const err = e as Error & { status?: number };
+        const err = e as ApiError;
         if (err.status === 404) {
           setHistoryError("Conversation not found. Redirected to a new chat.");
           navigate("/", { replace: true });
@@ -265,7 +314,7 @@ export default function ChatScreen() {
           void refreshConversations();
           return;
         }
-        setHistoryError(err.message || "Failed to load conversation history");
+        setHistoryError(uiMessageFromError(err, "Failed to load conversation history"));
       } finally {
         setHistoryLoading(false);
       }
@@ -341,42 +390,83 @@ export default function ChatScreen() {
 
         <section className="chat-main">
           <header className="app-header chat-header">
-            <div>
-              <h1 className="app-title">Calendar Assistant</h1>
+            <div className="chat-header-main">
+              <h1 className="app-title">{assistantName}</h1>
               <p className="muted small">Signed in as {user.email ?? user.google_sub}</p>
             </div>
             <div className="header-actions">
+              <button
+                type="button"
+                className={`btn ${userPreferences.trim() ? "success" : ""}`}
+                onClick={openPreferences}
+                disabled={busy}
+              >
+                Preferences
+              </button>
               <button type="button" className="btn" onClick={() => void signOut()} disabled={busy}>
                 Sign out
               </button>
             </div>
           </header>
 
-          {error && (
-            <div className="banner banner-error" role="alert">
-              {error}
-            </div>
-          )}
-
-          {historyError && (
-            <div className="banner banner-error" role="alert">
-              <span>{historyError}</span>
-              {conversationId && (
+          {preferencesOpen && (
+            <section className="preferences-panel" aria-label="Preferences editor">
+              <label className="preferences-label" htmlFor="user-preferences">
+                Scheduling preferences (optional)
+              </label>
+              <textarea
+                id="user-preferences"
+                className="preferences-input"
+                rows={3}
+                value={preferencesDraft}
+                onChange={(e) => setPreferencesDraft(e.target.value)}
+                placeholder="e.g. Prefer meetings between 10 AM and 4 PM, avoid Fridays."
+                disabled={busy}
+              />
+              <div className="preferences-actions">
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => setHistoryRetryToken((v) => v + 1)}
+                  onClick={() => setPreferencesOpen(false)}
                   disabled={busy}
                 >
-                  Retry
+                  Cancel
                 </button>
-              )}
-            </div>
+                <button type="button" className="btn primary" onClick={savePreferences} disabled={busy}>
+                  Save
+                </button>
+              </div>
+            </section>
           )}
+
+          <div className="status-stack">
+            {error && (
+              <div className="banner banner-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            {historyError && (
+              <div className="banner banner-error" role="alert">
+                <span>{historyError}</span>
+                {conversationId && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setHistoryRetryToken((v) => v + 1)}
+                    disabled={busy}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           <section className="chat-panel">
             <ChatMessageList
               messages={messages}
+              assistantName={assistantName}
               emptyHint="Try: “List my meetings next Tuesday” or “Draft an email to schedule time with the team.”"
             />
 
@@ -391,6 +481,7 @@ export default function ChatScreen() {
             <ChatComposer
               onSend={(t) => void sendMessage(t)}
               disabled={busy || historyLoading}
+              placeholder={`Message ${assistantName}…`}
             />
           </section>
         </section>

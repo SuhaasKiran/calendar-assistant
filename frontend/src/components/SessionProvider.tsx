@@ -9,6 +9,22 @@ import { fetchMe, logout as apiLogout } from "../api/auth";
 import { SessionContext } from "../context/SessionContext";
 import type { User } from "../api/auth";
 
+function oauthErrorBanner(errorCode: string): string {
+  switch (errorCode) {
+    case "token_exchange_failed":
+    case "userinfo_failed":
+      return "Sign-in failed due to a provider error. Please try again.";
+    case "invalid_state":
+      return "Sign-in failed because session validation failed. Please retry.";
+    case "missing_code":
+      return "Sign-in did not complete. Please try again.";
+    case "server_not_configured":
+      return "Sign-in is temporarily unavailable. Please contact support.";
+    default:
+      return "Sign-in failed. Please try again.";
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,7 +43,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setOauthBanner("Signed in successfully.");
       window.history.replaceState({}, "", window.location.pathname);
     } else if (error) {
-      setOauthBanner(`Sign-in failed: ${error}`);
+      setOauthBanner(oauthErrorBanner(error));
       window.history.replaceState({}, "", window.location.pathname);
     }
 

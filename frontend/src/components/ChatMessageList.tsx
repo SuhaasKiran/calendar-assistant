@@ -8,11 +8,12 @@ export type ChatMessage = {
 type Props = {
   messages: ChatMessage[];
   emptyHint?: string;
+  assistantName?: string;
 };
 
-function renderContentWithLinks(content: string): ReactNode[] {
+function renderContentWithFormatting(content: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const re = /(\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g;
   let last = 0;
   let idx = 0;
   let m: RegExpExecArray | null;
@@ -20,13 +21,18 @@ function renderContentWithLinks(content: string): ReactNode[] {
     if (m.index > last) {
       out.push(content.slice(last, m.index));
     }
-    const label = m[1];
-    const href = m[2];
-    out.push(
-      <a key={`link-${idx}`} href={href} target="_blank" rel="noopener noreferrer">
-        {label}
-      </a>,
-    );
+    const boldText = m[2];
+    const linkLabel = m[3];
+    const linkHref = m[4];
+    if (boldText) {
+      out.push(<strong key={`bold-${idx}`}>{boldText}</strong>);
+    } else if (linkLabel && linkHref) {
+      out.push(
+        <a key={`link-${idx}`} href={linkHref} target="_blank" rel="noopener noreferrer">
+          {linkLabel}
+        </a>,
+      );
+    }
     last = re.lastIndex;
     idx += 1;
   }
@@ -36,7 +42,11 @@ function renderContentWithLinks(content: string): ReactNode[] {
   return out;
 }
 
-export default function ChatMessageList({ messages, emptyHint }: Props) {
+export default function ChatMessageList({
+  messages,
+  emptyHint,
+  assistantName = "Assistant",
+}: Props) {
   if (messages.length === 0) {
     return (
       <div className="chat-empty muted" role="status">
@@ -52,12 +62,18 @@ export default function ChatMessageList({ messages, emptyHint }: Props) {
           key={`${i}-${m.role}`}
           className={`chat-bubble chat-bubble-${m.role}`}
         >
-          <span className="chat-role">{m.role === "user" ? "You" : "Assistant"}</span>
+          <span className="chat-role">{m.role === "user" ? "You" : assistantName}</span>
           <div className="chat-content">
             {m.content
-              ? renderContentWithLinks(m.content)
+              ? renderContentWithFormatting(m.content)
               : m.role === "assistant"
-                ? "…"
+                ? (
+                    <span className="typing-indicator" aria-label="Assistant is typing">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </span>
+                  )
                 : ""}
           </div>
         </li>
