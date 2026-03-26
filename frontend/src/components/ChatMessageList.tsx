@@ -69,6 +69,7 @@ export default function ChatMessageList({
               : m.role === "assistant"
                 ? (
                     <span className="typing-indicator" aria-label="Assistant is typing">
+                      <span className="typing-label">Thinking</span>
                       <span className="typing-dot" />
                       <span className="typing-dot" />
                       <span className="typing-dot" />
