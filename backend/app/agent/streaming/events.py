@@ -6,11 +6,15 @@ Yields small dicts the HTTP layer can JSON-serialize into `data:` lines.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk
 from langchain_core.runnables import RunnableConfig
+
+logger = logging.getLogger(__name__)
+GENERIC_STREAM_ERROR_MESSAGE = "Something went wrong on our side. Please try again."
 
 
 def _chunk_text(chunk: AIMessageChunk) -> str:
@@ -76,5 +80,6 @@ async def stream_agent_events(
                 yield {"type": "tool_error", "name": name, "message": str(err)}
 
         yield {"type": "done"}
-    except Exception as e:
-        yield {"type": "error", "message": str(e)}
+    except Exception:
+        logger.exception("Failed while streaming agent events")
+        yield {"type": "error", "message": GENERIC_STREAM_ERROR_MESSAGE}

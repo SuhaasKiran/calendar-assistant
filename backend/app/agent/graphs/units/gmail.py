@@ -13,9 +13,13 @@ from app.agent.tools.proposals_gmail import GMAIL_PROPOSAL_TYPES, build_gmail_pr
 from app.config import Settings
 
 
-def build_gmail_tool_bundle() -> list:
+def build_gmail_tool_bundle(
+    db: Session,
+    user_id: int,
+    settings: Settings,
+) -> list:
     """Tools for the Gmail unit (proposals + shared clarification)."""
-    return [*build_gmail_proposal_tools(), *build_hitl_tools()]
+    return [*build_gmail_proposal_tools(db, user_id, settings), *build_hitl_tools()]
 
 
 def build_gmail_subgraph(
@@ -34,7 +38,7 @@ def build_gmail_subgraph(
 
     Calendar reads are not available here; use the combined main graph for full UX.
     """
-    tools = build_gmail_tool_bundle()
+    tools = build_gmail_tool_bundle(db, user_id, settings)
     return build_react_assistant_graph(
         llm=llm,
         tools=tools,

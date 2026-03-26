@@ -5,10 +5,16 @@ Stream LangGraph outputs as JSON lines for SSE (interrupts + final assistant tex
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from typing import Any
 
 from langchain_core.messages import AIMessage
+
+logger = logging.getLogger(__name__)
+GENERIC_STREAM_ERROR_MESSAGE = "Something went wrong on our side. Please try again."
+
+
 def _last_assistant_reply(messages: list[Any]) -> str:
     for m in reversed(messages or []):
         if isinstance(m, AIMessage) and m.content:
@@ -57,5 +63,9 @@ def stream_graph_sse(
             yield json.dumps({"type": "content", "text": text}) + "\n"
 
         yield json.dumps({"type": "done"}) + "\n"
-    except Exception as e:
-        yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+    except Exception:
+        logger.exception("Failed while streaming graph SSE response")
+        yield (
+            json.dumps({"type": "error", "message": GENERIC_STREAM_ERROR_MESSAGE})
+            + "\n"
+        )

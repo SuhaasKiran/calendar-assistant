@@ -20,7 +20,7 @@ def build_proposal_tools(
     """All proposal tools (calendar + Gmail)."""
     return [
         *build_calendar_proposal_tools(db, user_id, settings),
-        *build_gmail_proposal_tools(),
+        *build_gmail_proposal_tools(db, user_id, settings),
     ]
 
 
