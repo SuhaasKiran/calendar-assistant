@@ -1,3 +1,5 @@
+"""Tests for formatting user-visible execution summaries."""
+
 from app.agent.tools.execution import format_execution_summary
 
 

@@ -1,3 +1,5 @@
+"""Tests for generic retry behavior utilities."""
+
 from app.core.resilience import call_with_retry
 
 

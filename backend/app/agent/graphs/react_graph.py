@@ -40,12 +40,20 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 
-def _now_rfc3339_in_tz(tz_name: str) -> str:
+def _current_time_context(tz_name: str) -> tuple[str, str, str]:
+    """Return local date/day context in user timezone."""
     try:
         z = ZoneInfo(tz_name)
+        resolved_tz = tz_name
     except Exception:
         z = ZoneInfo("UTC")
-    return datetime.now(z).isoformat()
+        resolved_tz = "UTC"
+    now = datetime.now(z)
+    return (
+        resolved_tz,
+        now.strftime("%Y-%m-%d"),
+        now.strftime("%A"),
+    )
 
 
 def _tool_call_ids_from_ai(ai: AIMessage) -> set[str]:
@@ -516,10 +524,13 @@ def build_react_assistant_graph(
 
         recent_slice = msgs[-SUMMARY_KEEP_RECENT_MESSAGES:]
         recent_context = _render_recent_messages(recent_slice)
-        now_iso = _now_rfc3339_in_tz(default_timezone)
+        tz_name, current_date, current_weekday = _current_time_context(default_timezone)
         dynamic_ctx = (
-            f"\n\nContext (refreshed each model call): "
-            f"Current local time for the user ({default_timezone}): {now_iso}. "
+            "\n\nContext (refreshed each model call): "
+            f"User timezone: {tz_name}. "
+            f"Current local date: {current_date}. "
+            f"Current local day of week: {current_weekday}. "
+            "Resolve all relative date/day references against this local date/day context. "
             f"User email: {user_email or '—'}."
         )
         summary_ctx = chat_context_prompt(

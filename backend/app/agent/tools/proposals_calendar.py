@@ -1,10 +1,12 @@
 """Calendar proposal tools (queue mutations until approval)."""
 
+import re
 import uuid
+from email.utils import parseaddr
 
 from googleapiclient.errors import HttpError
 from langchain.tools import ToolRuntime
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from sqlalchemy.orm import Session
@@ -16,6 +18,73 @@ from app.config import Settings
 from app.services import calendar_client
 
 CALENDAR_PROPOSAL_TYPES = frozenset({"create_event", "update_event", "delete_event"})
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PLACEHOLDER_EMAIL_DOMAINS = frozenset(
+    {
+        "example.com",
+        "example.org",
+        "example.net",
+        "test.com",
+        "localhost",
+        "local",
+    }
+)
+
+
+def _normalize_attendees_csv(raw: str | None) -> tuple[str, list[str]]:
+    text = str(raw or "").strip()
+    if not text:
+        return "", []
+    out: list[str] = []
+    invalid: list[str] = []
+    for part in text.replace(";", ",").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        _name, parsed = parseaddr(token)
+        candidate = (parsed or token).strip()
+        if not EMAIL_RE.fullmatch(candidate):
+            invalid.append(token)
+            continue
+        domain = candidate.rsplit("@", 1)[-1].lower()
+        if domain in PLACEHOLDER_EMAIL_DOMAINS:
+            invalid.append(token)
+            continue
+        out.append(candidate)
+    # Preserve order while deduplicating.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for email in out:
+        low = email.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        deduped.append(email)
+    return ", ".join(deduped), invalid
+
+
+def _clarify_attendee_emails(runtime: ToolRuntime, invalid: list[str]) -> Command:
+    bad = ", ".join(repr(v) for v in invalid)
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=(
+                        "Cannot queue calendar action because attendee entries are not valid "
+                        f"email IDs: {bad}."
+                    ),
+                    tool_call_id=runtime.tool_call_id or "",
+                ),
+                AIMessage(
+                    content=(
+                        "Please provide attendees as email IDs (for example: "
+                        "`alice@example.com, bob@example.com`). "
+                        "If this is a personal event, say no attendees."
+                    )
+                ),
+            ]
+        }
+    )
 
 
 def _load_event(
@@ -82,6 +151,9 @@ def build_calendar_proposal_tools(
         calendar_id: str = "primary",
     ) -> Command:
         """Queue creating a calendar event (requires user approval). Requires RFC3339 start/end and IANA timezone. Attendees are optional for personal events. Conflicts on the user's calendar block queueing."""
+        normalized_attendees, invalid_attendees = _normalize_attendees_csv(attendees)
+        if invalid_attendees:
+            return _clarify_attendee_emails(runtime, invalid_attendees)
         err = _validate_create_fields(
             summary=summary,
             start_datetime=start_datetime,
@@ -146,7 +218,7 @@ def build_calendar_proposal_tools(
             "timezone": timezone.strip(),
             "description": description.strip() if description else None,
             "calendar_id": calendar_id,
-            "attendees": attendees.strip(),
+            "attendees": normalized_attendees,
             "create_meet_link": True,
         }
         return Command(
@@ -175,6 +247,9 @@ def build_calendar_proposal_tools(
         calendar_id: str = "primary",
     ) -> Command:
         """Queue creating a Google Meet meeting (calendar event + Meet link) that runs only after approval."""
+        normalized_attendees, invalid_attendees = _normalize_attendees_csv(attendees)
+        if invalid_attendees:
+            return _clarify_attendee_emails(runtime, invalid_attendees)
         err = _validate_create_fields(
             summary=summary,
             start_datetime=start_datetime,
@@ -239,7 +314,7 @@ def build_calendar_proposal_tools(
             "timezone": timezone.strip(),
             "description": description.strip() if description else None,
             "calendar_id": calendar_id,
-            "attendees": attendees.strip(),
+            "attendees": normalized_attendees,
             "create_meet_link": True,
         }
         return Command(
@@ -269,6 +344,11 @@ def build_calendar_proposal_tools(
         attendees: str | None = None,
     ) -> Command:
         """Queue updating an event that already exists on Google Calendar. If changing times, pass both start and end RFC3339 datetimes."""
+        normalized_attendees: str | None = None
+        if attendees is not None:
+            normalized_attendees, invalid_attendees = _normalize_attendees_csv(attendees)
+            if invalid_attendees:
+                return _clarify_attendee_emails(runtime, invalid_attendees)
         eid = event_id.strip()
         existing, missing = _load_event(
             db, user_id, settings, event_id=eid, calendar_id=calendar_id
@@ -316,7 +396,11 @@ def build_calendar_proposal_tools(
             ),
             "timezone": timezone if timezone is not None else existing_fields.get("timezone"),
             "calendar_id": calendar_id,
-            "attendees": attendees if attendees is not None else existing_fields.get("attendees"),
+            "attendees": (
+                normalized_attendees
+                if attendees is not None
+                else existing_fields.get("attendees")
+            ),
         }
         return Command(
             update={

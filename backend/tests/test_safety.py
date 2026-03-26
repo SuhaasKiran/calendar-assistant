@@ -1,3 +1,5 @@
+"""Tests for user-input and email safety policy checks."""
+
 from app.config import Settings
 from app.core.safety import evaluate_email_send_risk, evaluate_user_message
 

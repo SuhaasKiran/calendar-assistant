@@ -20,6 +20,8 @@ from app.services import calendar_client, gmail_client
 from app.services.google_credentials import ReauthRequiredError
 
 logger = logging.getLogger(__name__)
+GENERIC_EXECUTION_ERROR = "Unable to complete this action right now."
+GENERIC_PROVIDER_ERROR = "External service temporarily unavailable."
 
 
 def _result_success(
@@ -68,6 +70,25 @@ def _require_fields(payload: dict[str, Any], fields: list[str], *, action: str) 
     missing = [f for f in fields if not payload.get(f)]
     if missing:
         raise ValueError(f"{action} response missing fields: {', '.join(missing)}")
+
+
+def _extract_draft_id(out: Any) -> str | None:
+    """
+    Gmail draft APIs may return either:
+    - {"id": "...", "message": {...}}
+    - {"draft": {"id": "...", ...}, ...}
+    """
+    if not isinstance(out, dict):
+        return None
+    top_level = out.get("id")
+    if isinstance(top_level, str) and top_level.strip():
+        return top_level.strip()
+    draft_obj = out.get("draft")
+    if isinstance(draft_obj, dict):
+        nested = draft_obj.get("id")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
 
 
 def _meet_conference_payload(seed: str) -> dict[str, Any]:
@@ -224,17 +245,16 @@ def execute_proposal(
                 subject=proposal["subject"],
                 body=proposal["body"],
             )
-            draft_obj = out.get("draft") if isinstance(out, dict) else None
-            if not isinstance(draft_obj, dict):
-                raise ValueError("create_email_draft response missing draft object")
-            _require_fields(draft_obj, ["id"], action="create_email_draft")
+            draft_id = _extract_draft_id(out)
+            if not draft_id:
+                raise ValueError("create_email_draft response missing draft id")
             return {
                 **_result_success(
                     pid=pid,
                     ptype=ptype,
                     detail="Draft created",
                     result=out,
-                    external_reference=str(draft_obj.get("id")),
+                    external_reference=draft_id,
                 ),
                 "to": proposal.get("to"),
                 "subject": proposal.get("subject"),
@@ -279,10 +299,17 @@ def execute_proposal(
         )
     except HttpError as e:
         retryable = e.resp.status in (429, 500, 502, 503, 504)
+        logger.warning(
+            "Google API proposal failure proposal_id=%s type=%s status=%s detail=%s",
+            pid,
+            ptype,
+            e.resp.status,
+            _http_err(e),
+        )
         return _result_failure(
             pid=pid,
             ptype=ptype,
-            detail=_http_err(e),
+            detail=GENERIC_PROVIDER_ERROR,
             error_code=f"GOOGLE_HTTP_{e.resp.status}",
             retryable=retryable,
         )
@@ -291,7 +318,7 @@ def execute_proposal(
         return _result_failure(
             pid=pid,
             ptype=ptype,
-            detail=str(e),
+            detail=GENERIC_EXECUTION_ERROR,
             error_code="EXECUTION_EXCEPTION",
             retryable=False,
         )
