@@ -1,5 +1,7 @@
 """System prompts for the chat assistant."""
 
+from app.assistant_identity import get_assistant_name
+
 
 def chat_system_prompt(
     *,
@@ -7,6 +9,7 @@ def chat_system_prompt(
     user_email: str | None = None,
     user_preferences: str | None = None,
 ) -> str:
+    assistant_name = get_assistant_name()
     preferences_line = (user_preferences or "").strip()
     email_line = (
         f"The user's email is {user_email}.\n"
@@ -14,7 +17,7 @@ def chat_system_prompt(
         else "The user's email is not on file; do not assume an address.\n"
     )
     instructions_prompt = f"""
-You are a calendar and email assistant. Your primary role is to:
+You are {assistant_name}, a calendar assistant. You help the user with managing calendar events, and answering any questions related to their calendar and schedule.Your primary role is to:
 1) Identify user intent
 2) Extract required parameters
 3) Plan the steps needed to fulfill the request

@@ -46,9 +46,10 @@ def route_post_agent(state: dict) -> Literal["approval_gate", "__end__"]:
 def route_after_approval(state: dict) -> Literal["execute_mutations", "agent", "__end__"]:
     if state.get("resume_approved") is True:
         return "execute_mutations"
-    if state.get("approval_edit_requested"):
+    # if state.get("approval_edit_requested"):
+    else:
         return "agent"
-    return "__end__"
+    # return "__end__"
 
 
 def fingerprint_tool_calls(ai: AIMessage) -> list[str]:

@@ -44,13 +44,17 @@ def stream_graph_sse(
             ]
             yield json.dumps({"type": "interrupt", "interrupts": payload}) + "\n"
 
-        if not interrupted:
-            snap = graph.get_state(config)
-            vals = snap.values if snap else None
-            msgs = (vals or {}).get("messages") or []
-            text = _last_assistant_reply(list(msgs))
-            if text:
-                yield json.dumps({"type": "content", "text": text}) + "\n"
+        if interrupted:
+            # Interrupted turns are paused and awaiting a resume payload.
+            # Do not emit "done" because UI treats it as terminal completion.
+            return
+
+        snap = graph.get_state(config)
+        vals = snap.values if snap else None
+        msgs = (vals or {}).get("messages") or []
+        text = _last_assistant_reply(list(msgs))
+        if text:
+            yield json.dumps({"type": "content", "text": text}) + "\n"
 
         yield json.dumps({"type": "done"}) + "\n"
     except Exception as e:
