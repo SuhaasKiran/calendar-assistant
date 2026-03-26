@@ -12,6 +12,10 @@ class ChatRequest(BaseModel):
     """Send a user message or resume after a human-in-the-loop interrupt."""
 
     message: str | None = None
+    user_preferences: str = Field(
+        default="",
+        description="Optional user preferences for scheduling defaults in the assistant prompt.",
+    )
     conversation_id: str | None = Field(
         default=None,
         description="Existing conversation UUID; omit to start a new thread.",

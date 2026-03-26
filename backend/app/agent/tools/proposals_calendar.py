@@ -76,18 +76,17 @@ def build_calendar_proposal_tools(
         start_datetime: str,
         end_datetime: str,
         timezone: str,
-        attendees: str,
         runtime: ToolRuntime,
+        attendees: str = "",
         description: str | None = None,
         calendar_id: str = "primary",
     ) -> Command:
-        """Queue creating a calendar event (requires user approval). Requires RFC3339 start/end, IANA timezone, and comma-separated participant emails. Conflicts on the user's calendar block queueing."""
+        """Queue creating a calendar event (requires user approval). Requires RFC3339 start/end and IANA timezone. Attendees are optional for personal events. Conflicts on the user's calendar block queueing."""
         err = _validate_create_fields(
             summary=summary,
             start_datetime=start_datetime,
             end_datetime=end_datetime,
             timezone=timezone,
-            attendees=attendees,
         )
         if err:
             return Command(
@@ -170,8 +169,8 @@ def build_calendar_proposal_tools(
         start_datetime: str,
         end_datetime: str,
         timezone: str,
-        attendees: str,
         runtime: ToolRuntime,
+        attendees: str = "",
         description: str | None = None,
         calendar_id: str = "primary",
     ) -> Command:
@@ -181,7 +180,6 @@ def build_calendar_proposal_tools(
             start_datetime=start_datetime,
             end_datetime=end_datetime,
             timezone=timezone,
-            attendees=attendees,
         )
         if err:
             return Command(
@@ -409,7 +407,6 @@ def _validate_create_fields(
     start_datetime: str,
     end_datetime: str,
     timezone: str,
-    attendees: str,
 ) -> str | None:
     if not (summary or "").strip():
         return "Error: event title/summary is required."
@@ -419,6 +416,4 @@ def _validate_create_fields(
         return "Error: end_datetime is required (RFC3339)."
     if not (timezone or "").strip():
         return "Error: timezone is required (IANA name, e.g. America/Los_Angeles)."
-    if not (attendees or "").strip():
-        return "Error: attendees is required — comma-separated participant email addresses."
     return None

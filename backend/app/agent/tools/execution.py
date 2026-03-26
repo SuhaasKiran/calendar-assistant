@@ -174,6 +174,8 @@ def execute_proposal(
                 "proposal_id": pid,
                 "type": ptype,
                 "detail": "Draft created",
+                "to": proposal.get("to"),
+                "subject": proposal.get("subject"),
                 "result": out,
             }
 
@@ -191,6 +193,8 @@ def execute_proposal(
                 "proposal_id": pid,
                 "type": ptype,
                 "detail": "Email sent",
+                "to": proposal.get("to"),
+                "subject": proposal.get("subject"),
                 "result": out,
             }
 
@@ -303,6 +307,22 @@ def _format_call_details(title: str, ev: dict[str, Any]) -> str:
     )
 
 
+def _format_sent_email_details(r: dict[str, Any]) -> str:
+    out = r.get("result")
+    result = out if isinstance(out, dict) else {}
+    to = str(r.get("to") or "—")
+    subject = str(r.get("subject") or "—")
+    message_id = str(result.get("id") or "—")
+    thread_id = str(result.get("threadId") or "—")
+    return (
+        "Email sent successfully.\n"
+        f"To: {to}\n"
+        f"Subject: {subject}\n"
+        # f"Message ID: {message_id}\n"
+        # f"Thread ID: {thread_id}"
+    )
+
+
 def format_execution_summary(results: list[dict[str, Any]]) -> str:
     blocks: list[str] = []
     for r in results:
@@ -322,11 +342,11 @@ def format_execution_summary(results: list[dict[str, Any]]) -> str:
             blocks.append(_format_call_details("Call cancelled successfully.", result))
             continue
         if action == "create_email_draft":
-            blocks.append("Email draft created successfully.")
+            # Draft creation is intentional but does not need a user-facing execution update.
             continue
         if action == "send_email":
-            blocks.append("Email sent successfully.")
+            blocks.append(_format_sent_email_details(r))
             continue
 
         blocks.append(str(r.get("detail") or "Action completed."))
-    return "\n\n".join(blocks) if blocks else "No actions executed."
+    return "\n\n".join(blocks)

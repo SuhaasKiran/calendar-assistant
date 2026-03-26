@@ -26,6 +26,7 @@ def build_calendar_assistant_graph(
     default_timezone: str,
     approval_from_email: str | None = None,
     user_email: str | None = None,
+    user_preferences: str | None = None,
 ):
     """
     Production graph: calendar reads + calendar/Gmail proposals + HITL in one loop.
@@ -44,6 +45,7 @@ def build_calendar_assistant_graph(
         system_prompt=chat_system_prompt(
             user_timezone=default_timezone,
             user_email=user_email,
+            user_preferences=user_preferences,
         ),
         settings=settings,
         checkpointer=checkpointer,

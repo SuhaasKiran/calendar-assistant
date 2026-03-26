@@ -20,6 +20,7 @@ def build_chat_agent(
     user_timezone: str,
     approval_from_email: str | None = None,
     user_email: str | None = None,
+    user_preferences: str | None = None,
 ):
     """
     Compile the calendar assistant StateGraph with HITL, tool limits, and Sqlite checkpointer.
@@ -37,4 +38,5 @@ def build_chat_agent(
         default_timezone=user_timezone,
         approval_from_email=approval_from_email,
         user_email=user_email,
+        user_preferences=user_preferences,
     )

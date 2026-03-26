@@ -188,6 +188,47 @@ def _message_content_text(msg: Any) -> str:
     return str(content).strip()
 
 
+def _safe_json_text(text: str) -> str:
+    """Normalize text so downstream JSON payload encoding cannot fail on bad codepoints."""
+    if not text:
+        return text
+    cleaned = text.replace("\x00", "")
+    return cleaned.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+def _sanitize_message_for_llm(msg: Any) -> Any:
+    """Return a message with JSON-safe textual content."""
+    content = getattr(msg, "content", None)
+    if isinstance(content, str):
+        safe = _safe_json_text(content)
+        if safe != content and hasattr(msg, "model_copy"):
+            return msg.model_copy(update={"content": safe})
+        return msg
+    if isinstance(content, list):
+        changed = False
+        safe_blocks: list[Any] = []
+        for block in content:
+            if isinstance(block, str):
+                safe_block = _safe_json_text(block)
+                changed = changed or (safe_block != block)
+                safe_blocks.append(safe_block)
+            elif isinstance(block, dict):
+                b = dict(block)
+                txt = b.get("text")
+                if isinstance(txt, str):
+                    safe_txt = _safe_json_text(txt)
+                    if safe_txt != txt:
+                        b["text"] = safe_txt
+                        changed = True
+                safe_blocks.append(b)
+            else:
+                safe_blocks.append(block)
+        if changed and hasattr(msg, "model_copy"):
+            return msg.model_copy(update={"content": safe_blocks})
+        return msg
+    return msg
+
+
 def _render_recent_messages(messages: list[Any]) -> str:
     lines: list[str] = []
     for msg in messages:
@@ -456,6 +497,7 @@ def build_react_assistant_graph(
         state: CalendarAgentState, config: RunnableConfig | None = None
     ) -> dict[str, Any]:
         msgs = _repair_openai_tool_message_chain(list(state["messages"]))
+        msgs = [_sanitize_message_for_llm(m) for m in msgs]
         existing_summary = (state.get("conversation_summary") or "").strip() or None
 
         updates: dict[str, Any] = {}
@@ -484,7 +526,7 @@ def build_react_assistant_graph(
             conversation_summary=existing_summary,
             recent_messages_context=recent_context,
         )
-        combined_system = system_prompt + dynamic_ctx + summary_ctx
+        combined_system = _safe_json_text(system_prompt + dynamic_ctx + summary_ctx)
         if not msgs:
             msgs = [SystemMessage(content=combined_system)]
         elif hasattr(msgs[0], "type") and msgs[0].type == "system":
@@ -646,12 +688,15 @@ def build_react_assistant_graph(
             proposals=props,
         )
         summary = format_execution_summary(results)
+        messages: list[AIMessage] = []
+        if summary.strip():
+            messages = [AIMessage(content=f"Executed actions:\n{summary}")]
         return {
             "pending_proposals": [PROPOSAL_CLEAR],
             "resume_approved": None,
             "approval_edit_requested": False,
             "last_execution_results": results,
-            "messages": [AIMessage(content=f"Executed actions:\n{summary}")],
+            "messages": messages,
         }
 
     def graceful_stop(

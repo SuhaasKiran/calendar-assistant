@@ -161,6 +161,7 @@ def chat_turn(
         user_timezone=tz,
         approval_from_email=user.email,
         user_email=user.email,
+        user_preferences=body.user_preferences or "",
     )
     config: dict = {
         "configurable": {"thread_id": conv.id},
