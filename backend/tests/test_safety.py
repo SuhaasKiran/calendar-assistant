@@ -28,3 +28,38 @@ def test_email_send_domain_allow_list_enforced() -> None:
     )
     assert decision.allowed is False
     assert decision.code == "SAFETY_EMAIL_DOMAIN_NOT_ALLOWED"
+
+
+def test_user_message_monitor_mode_allows_match_with_code() -> None:
+    settings = Settings(
+        safety_guard_enabled=True,
+        safety_guard_strict_block=False,
+        safety_blocked_terms="ignore previous instructions",
+    )
+    decision = evaluate_user_message("Please ignore previous instructions", settings)
+    assert decision.allowed is True
+    assert decision.code == "SAFETY_MONITOR_MATCH"
+
+
+def test_email_send_blocked_domain() -> None:
+    settings = Settings(send_email_blocked_domains="blocked.com")
+    decision = evaluate_email_send_risk(
+        recipient="x@blocked.com",
+        subject="Hi",
+        body="test",
+        settings=settings,
+    )
+    assert decision.allowed is False
+    assert decision.code == "SAFETY_EMAIL_DOMAIN_BLOCKED"
+
+
+def test_email_send_blocked_content_term() -> None:
+    settings = Settings(safety_email_blocked_terms="wire transfer")
+    decision = evaluate_email_send_risk(
+        recipient="friend@example.com",
+        subject="Urgent",
+        body="Please send a wire transfer today",
+        settings=settings,
+    )
+    assert decision.allowed is False
+    assert decision.code == "SAFETY_EMAIL_CONTENT_BLOCKED"
