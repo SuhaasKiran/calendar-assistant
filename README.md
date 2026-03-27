@@ -54,6 +54,17 @@ With Dobo, you can:
 - JWT-based session token for auth cookies
 - SQLite (application data + LangGraph checkpoint persistence)
 
+The **assistant agent** lives under `app/agent` (see `backend/app/agent/README.md`). Main features:
+
+- **LangGraph ReAct loop** — model alternates between reasoning and tool calls until the turn completes or pauses for approval.
+- **Calendar reads** — list/get events via Google Calendar tools before proposing changes.
+- **Proposal queue** — create/update/delete events and email drafts/sends are **proposed** first; nothing mutates Google until the user approves.
+- **Human-in-the-loop (HITL)** — interrupts surface pending actions for approve / edit / reject; execution runs only after approval.
+- **Resumable state** — SQLite checkpoints per conversation (`thread_id`) so interrupted flows can resume.
+- **Streaming to the client** — SSE carries interrupt payloads and final assistant text from the graph to the chat API.
+- **Configurable LLM** — OpenAI, Anthropic, or Ollama via settings.
+- **Guardrails in the loop** — rolling conversation summary, bounded message window, and tool-loop limits to avoid runaway tool use.
+
 ## 4. Setup (Prerequisites, Installation)
 
 ### Prerequisites
