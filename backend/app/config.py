@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     langgraph_checkpoint_path: str = "app/agent/db/langgraph_checkpoints.sqlite"
 
     # LLM: set `llm_provider` and the matching credentials / model names below.
-    llm_provider: Literal["openai", "anthropic", "ollama"] = "openai"
+    llm_provider: Literal["openai", "anthropic"] = "openai"
     llm_temperature: float = 0.0
 
     openai_api_key: str | None = None
@@ -46,9 +46,6 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-haiku-20241022"
-
-    ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "llama3.2"
 
     # Google API HTTP client (Calendar, Gmail)
     google_http_timeout_seconds: float = 30.0

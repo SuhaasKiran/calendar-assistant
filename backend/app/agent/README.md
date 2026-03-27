@@ -27,7 +27,7 @@ HTTP /chat  →  build_chat_agent  →  compiled StateGraph
 | `tools/` | LangChain tools: calendar reads, calendar/Gmail proposals, execution, HITL |
 | `prompts/` | System and dynamic context prompts (`chat_system_prompt`, `chat_context_prompt`) |
 | `streaming/` | SSE adapters: `stream_graph_sse`, `stream_agent_events` |
-| `utils/` | `build_chat_model` (OpenAI / Anthropic / Ollama), optional graph PNG export (`build_graph.py`) |
+| `utils/` | `build_chat_model` (OpenAI / Anthropic), optional graph PNG export (`build_graph.py`) |
 
 ## State (`graphs/state.py`)
 
@@ -88,7 +88,7 @@ The compiled graph is built by **`build_react_assistant_graph`**. Typical node f
 
 ## Utilities (`utils/`)
 
-- **`llm.py`** — **`build_chat_model(settings)`** selects OpenAI, Anthropic, or Ollama from `Settings`.
+- **`llm.py`** — **`build_chat_model(settings)`** selects OpenAI or Anthropic from `Settings`.
 - **`build_graph.py`** — Optional export of compiled graphs to Mermaid/PNG for documentation or debugging.
 
 ## How the HTTP layer uses this

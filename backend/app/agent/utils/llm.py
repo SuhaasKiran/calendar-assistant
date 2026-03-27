@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from app.config import Settings
@@ -14,7 +13,7 @@ from app.config import Settings
 
 def build_chat_model(settings: Settings) -> BaseChatModel:
     """
-    Return a LangChain chat model for OpenAI, Anthropic (Claude), or Ollama.
+    Return a LangChain chat model for OpenAI, Anthropic (Claude).
 
     Raises:
         RuntimeError: if required credentials or settings are missing for the
@@ -45,14 +44,6 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
             timeout=settings.llm_request_timeout_seconds,
         )
 
-    if provider == "ollama":
-        return ChatOllama(
-            model=settings.ollama_model,
-            base_url=settings.ollama_base_url,
-            temperature=temperature,
-            timeout=settings.llm_request_timeout_seconds,
-        )
-
     raise RuntimeError(
-        f"Unknown llm_provider {provider!r}; expected openai, anthropic, or ollama"
+        f"Unknown llm_provider {provider!r}; expected openai, anthropic"
     )

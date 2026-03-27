@@ -65,7 +65,6 @@ With Dobo, you can:
 - At least one LLM provider configured:
   - OpenAI (`OPENAI_API_KEY`)
   - Anthropic (`ANTHROPIC_API_KEY`)
-  - Ollama (local server and model)
 
 ### a. Frontend
 
