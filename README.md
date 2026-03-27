@@ -1,5 +1,8 @@
 # Dobo Assistant
 
+<img width="1470" height="956" alt="image" src="https://github.com/user-attachments/assets/27550af8-7c11-4e51-b6ec-01fc52ff9a58" />
+
+
 ## 1. About
 
 Dobo is a smart assistant that helps you manage your schedule and communication through simple chat.
@@ -64,6 +67,9 @@ The **assistant agent** lives under `app/agent` (see `backend/app/agent/README.m
 - **Streaming to the client** — SSE carries interrupt payloads and final assistant text from the graph to the chat API.
 - **Configurable LLM** — OpenAI, Anthropic, or Ollama via settings.
 - **Guardrails in the loop** — rolling conversation summary, bounded message window, and tool-loop limits to avoid runaway tool use.
+
+<img width="544" height="531" alt="image" src="https://github.com/user-attachments/assets/76ceb877-e728-43ea-a4c9-3ae5604264a5" />
+
 
 ## 4. Setup (Prerequisites, Installation)
 
@@ -144,7 +150,7 @@ Core frontend layers:
 
 ### Backend
 
-Run tests from `backend`:
+Run tests from `backend` (see `backend/app/agent/README.md`):
 
 - `uv run pytest`
 
